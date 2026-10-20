@@ -29,6 +29,8 @@ test("command palette: quick action adds a task that appears on the dashboard", 
   await expect(page.getByTestId("dash-task-list")).toContainText(title, { timeout: 10000 });
   // keyboard navigation: ↓ moves selection
   await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByTestId("palette-input")).toBeFocused();
+  await expect(page.getByTestId("palette-item-mod-dashboard")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("palette-item-mod-planner")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Escape");

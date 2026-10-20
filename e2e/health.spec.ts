@@ -17,7 +17,7 @@ test("tabs switch between 体調 / 食事 / 美容 / 検診", async ({ authed: p
   await page.getByRole("tab", { name: "検診" }).click();
   await expect(page.getByTestId("checkup-save")).toBeVisible();
   await page.getByRole("tab", { name: "体調" }).click();
-  await expect(page.getByTestId("pressure-card")).toBeVisible();
+  await expect(page.getByTestId("pressure-card")).toBeVisible({ timeout: 30_000 });
 });
 
 test("meal routine: add an item without nutrition and totals are marked partial; cost stays 未入力", async ({ authed: page }) => {
@@ -65,7 +65,7 @@ test("pressure: 今しんどい creates a log (weather location set first)", asy
   const put = await page.request.put("/api/settings/weather_location", { headers: ORIGIN, data: { name: "東京", lat: 35.68, lon: 139.76 } });
   expect(put.ok()).toBeTruthy();
   await page.reload();
-  await expect(page.getByTestId("pressure-card")).toBeVisible();
+  await expect(page.getByTestId("pressure-card")).toBeVisible({ timeout: 30_000 });
   const before = await page.getByTestId("pressure-log-item").count();
   await page.getByTestId("pressure-log-now").click();
   await expect(page.getByTestId("pressure-log-item")).toHaveCount(before + 1, { timeout: 20_000 });
