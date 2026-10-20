@@ -6,18 +6,33 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": { "not_found_handling": "single-page-application", "binding": "ASSETS" },
   "observability": { "enabled": true },
-  "ai": { "binding": "AI" },
+  // Top level = local development (no Workers AI binding so `vite dev` works offline; AI calls fall back).
   "d1_databases": [
     { "binding": "DB", "database_name": "life-os-db", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
   ],
-  "kv_namespaces": [
-    { "binding": "KV", "id": "local-kv-placeholder" }
-  ],
+  "kv_namespaces": [{ "binding": "KV", "id": "local-kv-placeholder" }],
   "triggers": { "crons": ["*/10 * * * *", "0 * * * *", "0 22 * * *"] },
   "vars": {
     "APP_NAME": "Life OS",
     "APP_ORIGIN": "http://localhost:5173",
     "ALLOWED_EMAILS": "namikyuu831@gmail.com",
     "DEV_LOGIN": "1"
+  },
+  "env": {
+    // Production: `npm run deploy` → wrangler deploy --env production.
+    // Fill database_id / kv id after `wrangler d1 create life-os-db` and `wrangler kv namespace create KV`.
+    "production": {
+      "ai": { "binding": "AI" },
+      "d1_databases": [
+        { "binding": "DB", "database_name": "life-os-db", "database_id": "REPLACE_WITH_D1_ID", "migrations_dir": "migrations" }
+      ],
+      "kv_namespaces": [{ "binding": "KV", "id": "REPLACE_WITH_KV_ID" }],
+      "triggers": { "crons": ["*/10 * * * *", "0 * * * *", "0 22 * * *"] },
+      "vars": {
+        "APP_NAME": "Life OS",
+        "APP_ORIGIN": "https://life-os.REPLACE.workers.dev",
+        "ALLOWED_EMAILS": "namikyuu831@gmail.com"
+      }
+    }
   }
 }

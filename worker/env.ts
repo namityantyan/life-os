@@ -1,7 +1,7 @@
 export type Env = {
   DB: D1Database;
   KV: KVNamespace;
-  AI: Ai;
+  AI?: Ai;
   ASSETS: Fetcher;
   APP_NAME: string;
   APP_ORIGIN: string;

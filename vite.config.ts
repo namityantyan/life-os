@@ -5,6 +5,6 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), cloudflare()],
-  resolve: { alias: { "@": "/src", "@worker": "/worker" } },
+  resolve: { alias: { "@": "/src", "@shared": "/shared", "@worker": "/worker" } },
   build: { chunkSizeWarningLimit: 1500 },
 });
