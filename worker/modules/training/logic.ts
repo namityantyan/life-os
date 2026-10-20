@@ -12,6 +12,35 @@ export type SetLike = {
 
 export type OneRm = { value: number; reference: boolean };
 
+export type SetInput = { weight?: number | null; reps?: number | null; duration_sec?: number | null; memo?: string | null };
+export type NormalizedSet = { unit: WeightUnit; weight: number | null; reps: number | null; duration_sec: number | null };
+
+/**
+ * Normalizes a set for storage. The recording unit always comes from the catalog entry
+ * (dumbbell → per_hand, smith → plate, bodyweight → reps only, plank → seconds); a client-supplied
+ * unit is never trusted, so a weighted exercise cannot be stored as "bodyweight" (dropping its weight)
+ * and a bodyweight exercise cannot gain a weight-based 1RM. Throws on missing reps / seconds.
+ */
+export function normalizeSetInput(entry: CatalogEntry, body: SetInput): NormalizedSet {
+  const unit: WeightUnit = entry.measurement === "seconds" ? "time" : entry.unit;
+  const isTime = unit === "time", isBw = unit === "bodyweight";
+  const weight = isTime || isBw ? null : body.weight ?? null;
+  const reps = isTime ? null : body.reps ?? null;
+  const duration_sec = isTime ? body.duration_sec ?? null : null;
+  if (isTime && duration_sec == null) throw new Error("duration_sec required");
+  if (!isTime && reps == null) throw new Error("reps required");
+  if (!isTime && !isBw && (weight == null || !(weight > 0))) throw new Error("weight required");
+  return { unit, weight, reps, duration_sec };
+}
+
+/** Japanese reply for a normalizeSetInput error (used by the Discord natural-text path). */
+export function setInputMessage(err: string, exerciseName: string): string {
+  if (err.startsWith("weight")) return `${exerciseName}は重量が必要です。例：「${exerciseName} 60kg 8回」`;
+  if (err.startsWith("duration")) return `${exerciseName}は秒数で記録します。例：「${exerciseName} 60秒」`;
+  if (err.startsWith("reps")) return `${exerciseName}は回数が必要です。例：「${exerciseName} 10回」`;
+  return "読み取れませんでした。";
+}
+
 const WEIGHT_UNITS = new Set<string>(["total", "per_hand", "plate"]);
 const isFiniteNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
 

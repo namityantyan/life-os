@@ -46,8 +46,9 @@ publicRoutes.post("/", async (c) => {
   const contentJson = JSON.stringify(parsed.content);
   const dup = await one<RunRow>(c.env.DB, "SELECT * FROM backup_runs WHERE user_id=? AND run_id=?", owner.id, runId);
   if (dup) {
-    if (dup.content_json !== contentJson) return c.json({ error: "run_id already received with different content", run_id: runId }, 409);
-    return c.json({ ok: true, duplicate: true, run_id: runId, id: dup.id }, 200);
+    // Spec §14: a resend of the same run (run_id) is idempotent → 200. The first receipt is kept;
+    // a differing body is only reported, never stored again and never notified twice.
+    return c.json({ ok: true, duplicate: true, run_id: runId, id: dup.id, content_changed: dup.content_json !== contentJson }, 200);
   }
   const n = normalizeRun(parsed.content);
   const id = newId();

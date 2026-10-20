@@ -44,3 +44,10 @@ test("notes: add with category, filter, search, inline edit, archive/unarchive",
   await page.getByTestId("note-archived-toggle").getByRole("switch").click();
   await expect(page.getByTestId("note-item").filter({ hasText: u })).toBeVisible();
 });
+
+test("notes: a failed load shows an error banner, not an empty list", async ({ authed: page }) => {
+  await page.route("**/api/notes", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal error" }) }));
+  await page.goto("/notes");
+  await expect(page.getByTestId("load-error")).toBeVisible();
+  await expect(page.getByText("メモはまだありません")).toHaveCount(0);
+});

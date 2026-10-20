@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppEnv } from "../../env";
 import { all, one, run, newId } from "../../core/db";
 import { chatJson } from "../../core/ai";
-import { IDEA_STATUSES, buildIdeaMarkdown, ensureFrontMatter, exportIdeasMarkdown, firstLineTitle } from "./logic";
+import { IDEA_STATUSES, buildIdeaMarkdown, ensureFrontMatter, exportIdeasMarkdown, firstLineTitle, syncFrontMatter } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -74,9 +74,16 @@ routes.patch("/:id", async (c) => {
   const existing = await getIdea(c.env.DB, id, user.id);
   if (!existing) return c.json({ error: "not found" }, 404);
   const sets: string[] = ["updated_at=datetime('now')"]; const params: unknown[] = [];
-  if (body.title !== undefined) { sets.push("title=?"); params.push(body.title || null); }
-  if (body.markdown !== undefined) { sets.push("markdown=?"); params.push(body.markdown || null); }
-  if (body.status !== undefined) { sets.push("status=?"); params.push(body.status); }
+  const title = body.title !== undefined ? (body.title || null) : existing.title;
+  const status = body.status ?? existing.status;
+  let markdown = body.markdown !== undefined ? (body.markdown || null) : existing.markdown;
+  // Keep the exported note's front matter honest: title/status edits are reflected in the stored markdown.
+  if (markdown && (title !== existing.title || status !== existing.status || body.markdown !== undefined)) {
+    markdown = syncFrontMatter(markdown, { title: title || firstLineTitle(existing.raw_text), created: existing.created_at, status });
+  }
+  if (body.title !== undefined) { sets.push("title=?"); params.push(title); }
+  if (markdown !== existing.markdown) { sets.push("markdown=?"); params.push(markdown); }
+  if (body.status !== undefined) { sets.push("status=?"); params.push(status); }
   if (body.archived !== undefined) sets.push(body.archived ? "archived_at=COALESCE(archived_at, datetime('now'))" : "archived_at=NULL");
   await run(c.env.DB, `UPDATE ideas SET ${sets.join(", ")} WHERE id=? AND user_id=?`, ...params, id, user.id);
   return c.json({ item: await getIdea(c.env.DB, id, user.id) });

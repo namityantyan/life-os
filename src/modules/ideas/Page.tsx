@@ -24,7 +24,7 @@ export default function Page() {
   const [firstLoad, setFirstLoad] = useState(true);
 
   const query = `/ideas?${filter !== "all" ? `status=${filter}&` : ""}${archived ? "archived=1" : ""}`;
-  const { data, loading, reload } = useApi<{ items: Idea[] }>(query);
+  const { data, loading, error, reload } = useApi<{ items: Idea[] }>(query);
   useEffect(() => { if (!loading && data) setFirstLoad(false); }, [loading, data]);
 
   const save = async () => {
@@ -45,6 +45,7 @@ export default function Page() {
         <a href="/api/ideas/export" download="ideas-export.md" className="pressable focus-ring inline-flex items-center h-10 px-4 rounded-[var(--radius-md)] bg-fill text-label text-base font-medium" data-testid="idea-export">一括エクスポート</a>
       } />
 
+      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
       <Card className="mb-6">
         <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="思いついたことを、そのまま書く。" aria-label="アイデア" data-testid="idea-compose"
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save(); }} />
@@ -59,7 +60,7 @@ export default function Page() {
         <label className="flex items-center gap-2 text-sm text-label-2" data-testid="idea-archived-toggle">アーカイブ<Toggle checked={archived} onChange={setArchived} label="アーカイブを表示" /></label>
       </div>
 
-      {items.length === 0 ? (
+      {error && !data ? null : items.length === 0 ? (
         <EmptyState title={archived ? "アーカイブはありません" : "アイデアはまだありません"} hint={archived ? undefined : "上の欄に書いて保存すると、ここに並びます。"} />
       ) : (
         <Stagger className="space-y-2" key={query}>
@@ -99,7 +100,7 @@ function IdeaModal({ idea, onClose, onChanged }: { idea: Idea | null; onClose: (
   useEffect(() => {
     if (!idea) return;
     setTitle(idea.title ?? ""); setMarkdown(idea.markdown ?? ""); setStatus(idea.status); setProvider(null);
-  }, [idea?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [idea?.id, idea?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!idea) return <Modal open={false} onClose={onClose}><div /></Modal>;
   const dirty = title !== (idea.title ?? "") || markdown !== (idea.markdown ?? "") || status !== idea.status;

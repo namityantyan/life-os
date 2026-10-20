@@ -18,10 +18,18 @@ export default function Page() {
   const list = useApi<ListRes>(`/backups?page=${page}`, { poll: 60_000 });
   if (latest.loading && !latest.data) return <PageSkeleton cards={3} />;
   const L = latest.data; const run = L?.latest ?? null;
+  const error = latest.error ?? list.error;
 
   return (
     <div className="pb-10">
       <PageHeader title="バックアップ" subtitle="別PCのDropboxバックアップ結果を受信して表示します。実行・同期・削除は行いません。" />
+
+      {error && (
+        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="backup-error">
+          <span>読み込みに失敗しました（{error}）</span>
+          <Button size="sm" onClick={() => { latest.reload(); list.reload(); }}>再読み込み</Button>
+        </div>
+      )}
 
       {L?.stale && run && (
         <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="mb-5 rounded-[var(--radius-lg)] bg-orange/10 text-orange px-5 py-3 text-sm flex flex-wrap items-center gap-2" role="status" data-testid="backup-stale">

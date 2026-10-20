@@ -86,7 +86,8 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
   const cols = "grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))]";
 
   return (
-    <div className="card overflow-hidden select-none" data-testid="week-grid" onWheel={onWheel}>
+    <div className="card overflow-x-auto overflow-y-hidden select-none" data-testid="week-grid" onWheel={onWheel}>
+      <div className="min-w-[40rem]">
       {/* day headers */}
       <div className={cx(cols, "border-b border-separator")}>
         <div />
@@ -187,6 +188,7 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
             );
           })}
         </div>
+      </div>
       </div>
     </div>
   );

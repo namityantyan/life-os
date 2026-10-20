@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { motion } from "motion/react";
 import type { LifeContext, PressureAssessment } from "@shared/types";
 import { api, useApi, fmtYen, fmtNum, fmtDateTime } from "@/lib/api";
-import { Badge, Button, Card, Input, PageSkeleton, Stagger, Item, Stat, cx, useToast } from "@/components/ui";
+import { Badge, Button, Card, Input, PageSkeleton, Stagger, Item, Stat, EmptyState, cx, useToast } from "@/components/ui";
 
 type Dash = {
   context: LifeContext; suggestion: string; today: string;
@@ -14,7 +14,7 @@ type Dash = {
   fxPairs: { pair: string; bid: number; ask: number; quoted_at: string }[];
 };
 
-function Clock() {
+function Clock({ weather }: { weather?: string | null }) {
   const [now, setNow] = useState(new Date());
   useEffect(() => { const id = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(id); }, []);
   const jst = new Date(now.getTime() + (now.getTimezoneOffset() + 540) * 60000);
@@ -23,6 +23,7 @@ function Clock() {
     <div>
       <div className="text-5xl md:text-6xl font-semibold tracking-tight tabular" data-testid="clock">{String(jst.getHours()).padStart(2, "0")}:{String(jst.getMinutes()).padStart(2, "0")}<span className="text-label-3 text-2xl ml-1">{String(jst.getSeconds()).padStart(2, "0")}</span></div>
       <div className="text-label-2 mt-1">{jst.getFullYear()}年{jst.getMonth() + 1}月{jst.getDate()}日（{w}）JST</div>
+      {weather && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-label-2 mt-2 truncate" data-testid="clock-weather">{weather}</motion.div>}
     </div>
   );
 }
@@ -32,20 +33,23 @@ const levelLabel: Record<PressureAssessment["level"], string> = { stable: "安�
 const sec = (s: number | null | undefined) => s == null ? "—" : `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
 
 export default function Page() {
-  const { data, loading, reload } = useApi<Dash>("/dashboard", { poll: 60000 });
+  const { data, loading, error, reload } = useApi<Dash>("/dashboard", { poll: 60000 });
   const toast = useToast();
   const [newTask, setNewTask] = useState("");
   useEffect(() => { document.title = "Life OS｜ダッシュボード"; }, []);
+  // Quick actions from the command palette (and other global writes) ask open pages to refresh.
+  useEffect(() => { const h = () => reload(true); window.addEventListener("lifeos:refresh", h); return () => window.removeEventListener("lifeos:refresh", h); }, [reload]);
   if (loading && !data) return <PageSkeleton cards={6} />;
-  if (!data) return null;
+  if (!data) return <EmptyState title="ダッシュボードを読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再試行</Button>} />;
   const ctx = data.context; const o = ctx.health.oura; const w = data.weather;
+  const weatherLine = w ? [w.location.name, w.temperature != null ? `${fmtNum(w.temperature, 1)}°` : null, w.weather_label, w.precipitation_probability != null ? `雨 ${w.precipitation_probability}%` : null, w.pressure.level !== "unknown" ? `気圧 ${levelLabel[w.pressure.level]}` : null].filter(Boolean).join(" · ") : null;
   const addTask = async () => { const t = newTask.trim(); if (!t) return; await api.post("/planner", { type: "task", title: t }); setNewTask(""); toast("タスクを追加しました", "success"); reload(true); };
   const toggleTask = async (id: string) => { await api.patch(`/planner/${id}`, { done: true }); reload(true); };
 
   return (
     <Stagger className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 auto-rows-min">
       <Item className="md:col-span-2 xl:col-span-2"><Card className="h-full flex flex-col justify-between gap-6">
-        <Clock />
+        <Clock weather={weatherLine} />
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="text-lg leading-relaxed text-label" data-testid="suggestion">{data.suggestion}</motion.p>
       </Card></Item>
 

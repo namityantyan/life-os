@@ -5,7 +5,7 @@ import { all, one, run, newId, getSetting, setSetting, jstDate } from "../../cor
 import { adviseWithContext } from "../../core/context";
 import type { CardTransaction, CardStatement, CardSettings, CardOverview } from "@shared/cards";
 import type { AssetAccount } from "@shared/assets";
-import { monthTotal, budgetLeft, cumulativeSeries, extraSpendGuide, parseStatementCsv, aggregateByMerchant } from "./logic";
+import { monthTotal, budgetLeft, cumulativeSeries, extraSpendGuide, parseStatementCsv, aggregateByMerchant, notifiedUnpaidTotal, isUsage } from "./logic";
 import { freshPersonalCash } from "../assets/logic";
 import { syncGmail } from "./gmail";
 import { loadToken } from "../assets/freee";
@@ -37,15 +37,14 @@ async function buildOverview(env: AppEnv["Bindings"], userId: string): Promise<C
   ]);
   const total = monthTotal(txs, month);
   const left = budgetLeft(settings.monthly_budget, total);
-  const paidIds = new Set(statements.filter((s) => s.paid).map((s) => s.id));
-  const notifiedUnpaid = txs.filter((t) => t.status !== "cancelled" && !(t.statement_id && paidIds.has(t.statement_id))).reduce((s, t) => s + t.amount, 0);
+  const notifiedUnpaid = notifiedUnpaidTotal(txs, statements);
   const unpaidStatements = statements.filter((s) => !s.paid).sort((a, b) => (a.debit_date ?? "9999").localeCompare(b.debit_date ?? "9999"));
   const statement = unpaidStatements.find((s) => (s.debit_date ?? "9999") >= today) ?? unpaidStatements[0] ?? null;
   let running = 0;
-  const timeline = txs.filter((t) => t.used_at.slice(0, 7) === month).map((t) => ({ ...t, running: (running += t.status === "cancelled" ? 0 : t.amount) })).reverse();
+  const timeline = txs.filter((t) => t.source !== "csv" && t.used_at.slice(0, 7) === month).map((t) => ({ ...t, running: (running += t.status === "cancelled" ? 0 : t.amount) })).reverse();
   const guide = extraSpendGuide({ cash: cash.amount, cashFresh: cash.fresh, reserve: settings.reserve_cash, unpaidConfirmed: settings.unpaid_confirmed, notifiedTotal: notifiedUnpaid, budgetLeft: left, nextBonusDate: settings.next_bonus_date, today });
   if (guide.undetermined && cash.amount == null && cash.reason) guide.reason = cash.reason;
-  return { month, today, month_total: total, count: txs.filter((t) => t.status !== "cancelled" && t.used_at.slice(0, 7) === month).length, budget: settings.monthly_budget, budget_left: left,
+  return { month, today, month_total: total, count: txs.filter((t) => isUsage(t) && t.used_at.slice(0, 7) === month).length, budget: settings.monthly_budget, budget_left: left,
     series: cumulativeSeries(txs, month, today), timeline, statement, notified_unpaid: notifiedUnpaid, cash: { amount: cash.amount, fresh: cash.fresh, as_of: cash.as_of }, guide, gmail_connected: Boolean(gmail) };
 }
 routes.get("/overview", async (c) => c.json(await buildOverview(c.env, uid(c))));
@@ -121,10 +120,10 @@ routes.get("/insights", async (c) => {
   const since = new Date(Date.parse(today) - 90 * 86400e3).toISOString().slice(0, 10);
   const txs = await all<CardTransaction>(c.env.DB, "SELECT * FROM card_transactions WHERE user_id=? AND used_at>=? ORDER BY used_at", uid(c), since);
   const settings = await getSetting<CardSettings>(c.env, uid(c), "card_settings", DEFAULT_SETTINGS);
-  const thisMonth = txs.filter((t) => t.used_at.slice(0, 7) === month);
+  const thisMonth = txs.filter((t) => isUsage(t) && t.used_at.slice(0, 7) === month);
   const merchants = aggregateByMerchant(thisMonth).slice(0, 10);
   const cats = new Map<string, number>();
-  for (const t of thisMonth) if (t.status !== "cancelled") cats.set(t.category || "未分類", (cats.get(t.category || "未分類") ?? 0) + t.amount);
+  for (const t of thisMonth) cats.set(t.category || "未分類", (cats.get(t.category || "未分類") ?? 0) + t.amount);
   const day = Number(today.slice(8, 10)); const total = monthTotal(txs, month);
   const dim = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).getUTCDate();
   const pace = day > 0 ? (total / day) * dim : null;

@@ -40,3 +40,12 @@ test("assets: plan → allocation shows a value or an undetermined reason", asyn
     await expect(undet.locator(".text-orange")).not.toBeEmpty();
   }
 });
+
+test("assets: partial account update keeps owner/currency/source (API)", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const created = await (await page.request.post("/api/assets/accounts", { headers: H, data: { name: `E2E USD ${Date.now()}`, category: "bank", currency: "usd", owner_type: "corporate", owner: "法人X", unit: "USD" } })).json();
+  expect(created).toMatchObject({ owner: "法人X", owner_type: "corporate", currency: "USD" });
+  const updated = await (await page.request.put(`/api/assets/accounts/${created.id}`, { headers: H, data: { name: created.name + " 改" } })).json();
+  expect(updated).toMatchObject({ name: created.name + " 改", owner: "法人X", owner_type: "corporate", currency: "USD", source: "manual", unit: "USD" });
+  await page.request.delete(`/api/assets/accounts/${created.id}`, { headers: H });
+});

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Button, PageHeader, PageSkeleton, useToast } from "@/components/ui";
+import { Button, EmptyState, PageHeader, PageSkeleton, useToast } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
 import type { DropTarget, GoogleResponse, ListResponse, PlannerCreate, PlannerItem, PlannerPatch } from "./types";
 import { addDays, fmtMD, isoAt, todayStr } from "./time";
@@ -48,7 +48,10 @@ export default function Page() {
   const onResize = (id: string, endIso: string) => patch(id, { end_at: endIso }).catch(() => {});
   const openAdd = (preset: AddPreset | null) => { setAddPreset(preset); setAddOpen(true); };
 
-  if (!list.data) return <PageSkeleton />;
+  if (!list.data) {
+    if (list.error) return <div><PageHeader title="スケジュール" /><EmptyState title="読み込めませんでした" hint={list.error} action={<Button onClick={() => list.reload()} data-testid="load-retry">再読み込み</Button>} /></div>;
+    return <PageSkeleton />;
+  }
 
   return (
     <div>

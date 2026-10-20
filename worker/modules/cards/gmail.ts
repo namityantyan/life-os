@@ -4,18 +4,21 @@ import { all, run, newId } from "../../core/db";
 import { loadToken, saveToken } from "../assets/freee";
 import { parseSmbcMail } from "./logic";
 
-type GToken = { access_token: string; refresh_token?: string; expires_at?: number; scope?: string };
+/** expires_at is an ISO string (written by the integrations module); legacy ms numbers are still accepted. */
+type GToken = { access_token: string; refresh_token?: string; expires_at?: string | number; scope?: string };
 export const GMAIL_QUERY = "from:(smbc-card.com) subject:(ご利用のお知らせ)";
+const expiresMs = (v: string | number | undefined) => (v == null ? 0 : typeof v === "number" ? v : Date.parse(v) || 0);
 
-async function valid(env: Env, userId: string): Promise<GToken | null> {
+/** Stored gmail token, refreshed when expired (shared with finance invoice-mail scan). */
+export async function validGmailToken(env: Env, userId: string): Promise<GToken | null> {
   const t = await loadToken(env, userId, "gmail") as unknown as GToken | null;
   if (!t) return null;
-  if (t.expires_at && t.expires_at > Date.now()) return t;
+  if (expiresMs(t.expires_at) > Date.now() + 60_000) return t;
   if (!t.refresh_token || !env.GOOGLE_CLIENT_ID) return t;
   const res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET ?? "", refresh_token: t.refresh_token, grant_type: "refresh_token" }) });
   if (!res.ok) throw new Error(`gmail token refresh: ${res.status}`);
   const j = (await res.json()) as { access_token: string; expires_in: number };
-  const n = { ...t, access_token: j.access_token, expires_at: Date.now() + j.expires_in * 1000 - 60_000 };
+  const n = { ...t, access_token: j.access_token, expires_at: new Date(Date.now() + (j.expires_in ?? 3600) * 1000).toISOString() };
   await saveToken(env, userId, n, "gmail");
   return n;
 }
@@ -28,7 +31,7 @@ function bodyOf(p: any): string {
 }
 
 export async function syncGmail(env: Env, userId: string, opts: { days?: number } = {}): Promise<{ connected: boolean; found: number; imported: number; errors: string[] }> {
-  const t = await valid(env, userId);
+  const t = await validGmailToken(env, userId);
   if (!t) return { connected: false, found: 0, imported: 0, errors: [] };
   const q = `${GMAIL_QUERY} newer_than:${opts.days ?? 60}d`;
   const H = { Authorization: `Bearer ${t.access_token}` };

@@ -4,7 +4,7 @@ import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, nowIso } from "../../core/db";
 import { notify } from "../../core/notify";
 import { CATALOG, PARTS, getExercise, canonicalKey, legacyKeysFor, searchCatalog, unitFor, type CatalogEntry, type TrainingSession, type TrainingSet, type ExerciseRecord, type Part, type Equipment, EQUIPMENTS } from "../../../shared/training";
-import { pickBest, progressionAdvice, summarizeSession, type Advice } from "./logic";
+import { pickBest, progressionAdvice, summarizeSession, normalizeSetInput, setInputMessage, type Advice } from "./logic";
 import { parseTrainingText, type ParsedAction } from "./nlp";
 
 export const routes = new Hono<AppEnv>();
@@ -51,13 +51,9 @@ async function startSession(env: Env, userId: string, part: Part) {
 async function addSet(env: Env, userId: string, sessionId: string, body: z.infer<typeof setBody>) {
   const key = canonicalKey(body.exercise_key);
   const entry = getExercise(key);
-  const unit = body.unit ?? (entry ? unitFor(entry) : null);
-  const isTime = unit === "time", isBw = unit === "bodyweight";
-  const weight = isTime || isBw ? null : body.weight ?? null;
-  const reps = isTime ? null : body.reps ?? null;
-  const duration = isTime ? body.duration_sec ?? null : null;
-  if (isTime && duration == null) throw new Error("duration_sec required");
-  if (!isTime && reps == null) throw new Error("reps required");
+  if (!entry) throw new Error("unknown exercise");
+  // The unit is derived from the catalog; `body.unit` is accepted for compatibility but never trusted.
+  const { unit, weight, reps, duration_sec: duration } = normalizeSetInput(entry, body);
   const id = newId();
   await run(env.DB, "INSERT INTO training_sets (id,session_id,user_id,exercise_key,weight,reps,duration_sec,unit,memo,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
     id, sessionId, userId, key, weight, reps, duration, unit, body.memo ?? null, nowIso());
@@ -216,6 +212,9 @@ export async function logFromText(env: Env, userId: string, text: string): Promi
       return { action: "advice", ok: true, advice, message: advice.message };
     }
     case "set": {
+      // Validate the set before any side effect so a malformed phrase never leaves an empty session behind.
+      try { normalizeSetInput(parsed.exercise, { weight: parsed.weight, reps: parsed.reps, duration_sec: parsed.duration_sec }); }
+      catch (e) { return { action: "set", ok: false, message: setInputMessage((e as Error).message, parsed.exercise.name) }; }
       const { session } = await startSession(env, userId, parsed.exercise.part);
       let last: TrainingSet | undefined;
       for (let i = 0; i < parsed.sets; i++) {

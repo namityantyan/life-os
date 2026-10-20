@@ -35,6 +35,7 @@ export default function Page() {
 
   if (summary.loading && !summary.data) return <PageSkeleton />;
   const s = summary.data;
+  const error = summary.error ?? list.error;
 
   return (
     <div className="pb-10">
@@ -44,6 +45,13 @@ export default function Page() {
           <Button variant="primary" onClick={() => setEditing("new")} data-testid="finance-add">請求書を追加</Button>
         </>
       } />
+
+      {error && (
+        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="finance-error">
+          <span>読み込みに失敗しました（{error}）</span>
+          <Button size="sm" onClick={() => { summary.reload(); list.reload(); }}>再読み込み</Button>
+        </div>
+      )}
 
       {s && (
         <Card className="mb-6">
@@ -144,13 +152,15 @@ function InvoiceModal({ invoice, open, onClose, onSaved }: { invoice: Invoice | 
   };
   const remove = async () => {
     if (!invoice || !confirm("この請求書を削除しますか？")) return;
-    await api.del(`/finance/${invoice.id}`); toast("削除しました"); onSaved();
+    setBusy(true);
+    try { await api.del(`/finance/${invoice.id}`); toast("削除しました"); onSaved(); }
+    catch (e: any) { toast(e?.message ?? "削除に失敗しました", "error"); } finally { setBusy(false); }
   };
 
   return (
     <Modal open={open} onClose={onClose} title={invoice ? "請求書を編集" : "請求書を追加"} footer={
       <>
-        {invoice && <Button variant="danger" onClick={remove} className="mr-auto">削除</Button>}
+        {invoice && <Button variant="danger" onClick={remove} disabled={busy} className="mr-auto">削除</Button>}
         <Button onClick={onClose}>キャンセル</Button>
         <Button variant="primary" onClick={save} loading={busy} data-testid="invoice-save">保存</Button>
       </>

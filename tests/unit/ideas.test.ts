@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFrontMatter, buildIdeaMarkdown, ensureFrontMatter, exportIdeasMarkdown, firstLineTitle, slugFilename } from "../../worker/modules/ideas/logic";
+import { buildFrontMatter, buildIdeaMarkdown, ensureFrontMatter, exportIdeasMarkdown, firstLineTitle, readFrontMatterTags, slugFilename, syncFrontMatter } from "../../worker/modules/ideas/logic";
 
 describe("ideas logic", () => {
   it("firstLineTitle takes the first non-empty line, strips markdown heading and truncates", () => {
@@ -43,5 +43,19 @@ describe("ideas logic", () => {
     expect(out).toContain("最初の行\n続き");
     expect(out).toContain('title: "整理済み"\ncreated: 2026-10-02\nstatus: next');
     expect(out.match(/^---$/gm)?.length).toBe(4);
+  });
+});
+
+describe("front matter re-sync on edit", () => {
+  it("readFrontMatterTags reads quoted tags and ignores notes without front matter", () => {
+    expect(readFrontMatterTags('---\ntitle: "T"\ntags: ["music", "散歩", "a\\"b"]\n---\n\nbody')).toEqual(["music", "散歩", 'a"b']);
+    expect(readFrontMatterTags('---\ntitle: "T"\ntags: []\n---\n')).toEqual([]);
+    expect(readFrontMatterTags("# plain\nbody")).toEqual([]);
+  });
+  it("syncFrontMatter updates title/status but keeps tags and body", () => {
+    const md = '---\ntitle: "old"\ncreated: 2026-10-01\nstatus: inbox\ntags: ["music"]\n---\n\n# old\n\n本文\n';
+    const out = syncFrontMatter(md, { title: "new", created: "2026-10-01T00:00:00Z", status: "next" });
+    expect(out.startsWith('---\ntitle: "new"\ncreated: 2026-10-01\nstatus: next\ntags: ["music"]\n---\n')).toBe(true);
+    expect(out).toContain("本文");
   });
 });

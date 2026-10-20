@@ -104,3 +104,17 @@ test("deleting an item removes it from the page", async ({ authed: page }) => {
   await expect(page.getByTestId("week-grid")).toBeVisible();
   await expect(page.getByTestId(`item-${item.id}`)).toHaveCount(0);
 });
+
+test("a failed first load shows an error with retry instead of an endless skeleton", async ({ authed: page }) => {
+  let fail = true;
+  await page.route("**/api/planner?*", async (route) => {
+    if (fail) await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal error" }) });
+    else await route.continue();
+  });
+  await page.goto("/planner");
+  await expect(page.getByTestId("load-retry")).toBeVisible();
+  await expect(page.getByTestId("page-skeleton")).toHaveCount(0);
+  fail = false;
+  await page.getByTestId("load-retry").click();
+  await expect(page.getByTestId("week-grid")).toBeVisible();
+});

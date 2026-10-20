@@ -23,11 +23,12 @@ export default function Page() {
   const reloadAll = () => { accounts.reload(true); overview.reload(true); };
   useEffect(() => { const f = params.get("freee"); if (f) { toast(f === "connected" ? "freeeと接続しました" : "freeeの接続に失敗しました", f === "connected" ? "success" : "error"); setParams((p) => { p.delete("freee"); return p; }, { replace: true }); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (accounts.loading && !accounts.data) return <PageSkeleton />;
-  const accs = accounts.data?.accounts ?? [];
+  if (!accounts.data) return <div><PageHeader title="資産" /><EmptyState title="資産を取得できません" hint={accounts.error ?? overview.error ?? undefined} action={<Button onClick={reloadAll}>再読み込み</Button>} /></div>;
+  const accs = accounts.data.accounts;
   return (
     <div>
       <PageHeader title="資産" subtitle="残高と円換算評価額。総資産は負債を控除した純資産ではありません。" actions={<Segmented value={tab} onChange={setTab} options={TABS} />} />
-      {tab === "overview" && <OverviewTab overview={overview.data} onChanged={reloadAll} />}
+      {tab === "overview" && <OverviewTab overview={overview.data} overviewError={overview.error} onChanged={reloadAll} />}
       {tab === "entry" && <EntryTab accounts={accs} onSaved={reloadAll} />}
       {tab === "accounts" && <AccountsTab accounts={accs} onChanged={reloadAll} />}
       {tab === "allocate" && <AllocateTab />}
@@ -37,8 +38,9 @@ export default function Page() {
 }
 
 /* ---------------- 概要 ---------------- */
-function OverviewTab({ overview, onChanged }: { overview: AssetOverview | null; onChanged: () => void }) {
+function OverviewTab({ overview, overviewError, onChanged }: { overview: AssetOverview | null; overviewError: string | null; onChanged: () => void }) {
   const toast = useToast();
+  const [importing, setImporting] = useState(false);
   const [owner, setOwner] = useState<"all" | "personal" | "corporate">("all");
   const [category, setCategory] = useState<"all" | AssetCategory>("all");
   const [period, setPeriod] = useState<"3m" | "1y" | "all">("1y");
@@ -48,10 +50,11 @@ function OverviewTab({ overview, onChanged }: { overview: AssetOverview | null; 
   const from = period === "all" ? "2000-01-01" : new Date(Date.parse(to) - (period === "3m" ? 92 : 365) * 86400e3).toISOString().slice(0, 10);
   const bal = useApi<BalancesResponse>(`/assets/balances?from=${from}&to=${to}&owner=${owner}&category=${category}`);
   const doImport = async () => {
+    setImporting(true);
     try { const r = await api.post<{ imported: number; errors: string[] }>("/assets/import", { csv }); toast(`${r.imported}件を取り込みました${r.errors.length ? `（エラー ${r.errors.length}件）` : ""}`, r.errors.length ? "error" : "success"); setImportOpen(false); setCsv(""); bal.reload(true); onChanged(); }
-    catch (e: any) { toast(e.message, "error"); }
+    catch (e: any) { toast(e.message, "error"); } finally { setImporting(false); }
   };
-  if (!overview) return <PageSkeleton cards={3} />;
+  if (!overview) return overviewError ? <EmptyState title="概要を取得できません" hint={overviewError} action={<Button onClick={onChanged}>再読み込み</Button>} /> : <PageSkeleton cards={3} />;
   const rr = bal.data?.recorded_range;
   return (
     <div className="space-y-6">
@@ -100,7 +103,7 @@ function OverviewTab({ overview, onChanged }: { overview: AssetOverview | null; 
           </Stagger>
         )}
       </Section>
-      <Modal open={importOpen} onClose={() => setImportOpen(false)} title="CSV取り込み" footer={<><Button onClick={() => setImportOpen(false)}>キャンセル</Button><Button variant="primary" onClick={doImport} disabled={!csv.trim()}>取り込む</Button></>}>
+      <Modal open={importOpen} onClose={() => setImportOpen(false)} title="CSV取り込み" footer={<><Button onClick={() => setImportOpen(false)}>キャンセル</Button><Button variant="primary" onClick={doImport} disabled={!csv.trim()} loading={importing}>取り込む</Button></>}>
         <p className="text-sm text-label-2 mb-2">列: date,account,quantity,rate,jpy_value。口座名は登録済みの名前と一致させてください。空欄は不明として記録しません。</p>
         <textarea className="focus-ring w-full h-40 p-3 rounded-[var(--radius-md)] bg-fill font-mono text-sm" value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"date,account,quantity,rate,jpy_value\n2026-10-01,メイン銀行,1500000,,"} />
       </Modal>
@@ -193,15 +196,17 @@ function AccountsTab({ accounts, onChanged }: { accounts: AssetAccount[]; onChan
   const [form, setForm] = useState(emptyForm);
   const [wallets, setWallets] = useState<{ id: number; name: string; last_balance?: number | null; last_synced_at?: string | null }[]>([]);
   const [syncing, setSyncing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const openNew = () => { setEditing(null); setForm(emptyForm); setOpen(true); };
   const openEdit = (a: AssetAccount) => { setEditing(a); setForm({ name: a.name, owner: a.owner, owner_type: a.owner_type, category: a.category, currency: a.currency, unit: a.unit ?? "", source: a.source, freee_company_id: a.freee_company_id ?? "", freee_walletable_id: a.freee_walletable_id ?? "" }); setOpen(true); };
   useEffect(() => { if (form.source === "freee" && form.freee_company_id) api.get<{ walletables: typeof wallets }>(`/assets/freee/companies/${form.freee_company_id}/walletables`).then((r) => setWallets(r.walletables)).catch(() => setWallets([])); else setWallets([]); }, [form.source, form.freee_company_id]);
   const submit = async () => {
+    setSubmitting(true);
     try {
       const body = { ...form, unit: form.unit || null, freee_company_id: form.source === "freee" ? form.freee_company_id || null : null, freee_walletable_id: form.source === "freee" ? form.freee_walletable_id || null : null, owner: form.owner_type === "personal" ? "personal" : form.owner || "法人" };
       if (editing) await api.put(`/assets/accounts/${editing.id}`, body); else await api.post("/assets/accounts", body);
       setOpen(false); onChanged(); toast("保存しました", "success");
-    } catch (e: any) { toast(e.message, "error"); }
+    } catch (e: any) { toast(e.message, "error"); } finally { setSubmitting(false); }
   };
   const archive = async (a: AssetAccount) => { if (!confirm(`「${a.name}」をアーカイブしますか？履歴は残ります。`)) return; await api.del(`/assets/accounts/${a.id}`); onChanged(); };
   const connect = async () => { try { const r = await api.get<{ url: string }>("/assets/freee/start"); window.location.href = r.url; } catch (e: any) { toast(e.message, "error"); } };
@@ -233,7 +238,7 @@ function AccountsTab({ accounts, onChanged }: { accounts: AssetAccount[]; onChan
           </Stagger>
         )}
       </Section>
-      <Modal open={open} onClose={() => setOpen(false)} title={editing ? "口座を編集" : "口座を追加"} footer={<><Button onClick={() => setOpen(false)}>キャンセル</Button><Button variant="primary" onClick={submit} disabled={!form.name.trim()} data-testid="account-submit">保存</Button></>}>
+      <Modal open={open} onClose={() => setOpen(false)} title={editing ? "口座を編集" : "口座を追加"} footer={<><Button onClick={() => setOpen(false)}>キャンセル</Button><Button variant="primary" onClick={submit} disabled={!form.name.trim()} loading={submitting} data-testid="account-submit">保存</Button></>}>
         <div className="grid grid-cols-2 gap-3">
           <Field label="口座名" className="col-span-2"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="account-name-input" /></Field>
           <Field label="名義の種類"><Select value={form.owner_type} onChange={(e) => setForm({ ...form, owner_type: e.target.value as any })}><option value="personal">個人</option><option value="corporate">法人</option></Select></Field>
@@ -258,17 +263,18 @@ function AllocateTab() {
   const plan = useApi<AssetPlan>("/assets/plan");
   const alloc = useApi<Allocation>("/assets/allocation");
   const [p, setP] = useState<AssetPlan | null>(null);
+  const [saving, setSaving] = useState(false);
   useEffect(() => { if (plan.data && !p) setP(plan.data); }, [plan.data, p]);
-  if (!p) return <PageSkeleton cards={2} />;
+  if (!p) return plan.error ? <EmptyState title="計画を取得できません" hint={plan.error} action={<Button onClick={() => plan.reload()}>再読み込み</Button>} /> : <PageSkeleton cards={2} />;
   const numOr = (v: string) => (v === "" ? null : Number(v));
-  const save = async () => { try { await api.put("/assets/plan", p); toast("計画を保存しました", "success"); alloc.reload(true); } catch (e: any) { toast(e.message, "error"); } };
+  const save = async () => { setSaving(true); try { await api.put("/assets/plan", p); toast("計画を保存しました", "success"); alloc.reload(true); } catch (e: any) { toast(e.message, "error"); } finally { setSaving(false); } };
   const a = alloc.data;
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <h2 className="text-lg font-semibold mb-1">配分の案</h2>
         <p className="text-xs text-label-2 mb-4">個人の円預金（2日以内に記録・freee同期）だけを基にします。法人資金や証券・FX・暗号資産は含めません。</p>
-        {!a ? null : a.undetermined ? (
+        {!a ? (alloc.error ? <div className="text-sm text-red">{alloc.error}</div> : null) : a.undetermined ? (
           <div data-testid="allocation-undetermined"><div className="text-2xl font-semibold">判断を保留</div><div className="text-sm text-orange mt-1">{a.reason}</div>{a.as_of && <div className="text-xs text-label-2 mt-1">最終記録 {a.as_of}</div>}</div>
         ) : (
           <div className="space-y-4" data-testid="allocation-result">
@@ -295,7 +301,7 @@ function AllocateTab() {
         </div>
         <ListEditor label="予定支出" items={p.planned_expenses} onChange={(items) => setP({ ...p, planned_expenses: items })} />
         <ListEditor label="負債" items={p.debts} onChange={(items) => setP({ ...p, debts: items })} />
-        <div className="flex justify-end mt-4"><Button variant="primary" onClick={save} data-testid="plan-save">保存して再計算</Button></div>
+        <div className="flex justify-end mt-4"><Button variant="primary" onClick={save} loading={saving} data-testid="plan-save">保存して再計算</Button></div>
       </Card>
     </div>
   );

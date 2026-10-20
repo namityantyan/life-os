@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { PageHeader, Card, Section, Badge, Button, Segmented, Select, Field, Input, Toggle, Stat, PageSkeleton, EmptyState, Stagger, Item, useToast, cx } from "@/components/ui";
+import { PageHeader, Card, Section, Badge, Button, Segmented, Select, Field, Input, Textarea, Toggle, Stat, PageSkeleton, EmptyState, Stagger, Item, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDateTime, fmtNum } from "@/lib/api";
 import { PAIRS, RULES, RULE_KEYS, pipSize, type Pair, type Rule, type Timeframe, type PairsResponse, type ChartResponse, type TradeRow, type FxSettings, type StatusResponse, type PerformanceResponse, type SetupMark, type ConnectorPosition } from "@shared/fx";
 import ChartView from "./ChartView";
@@ -58,10 +58,10 @@ function MarkPill({ mark, enabled }: { mark: SetupMark; enabled: boolean }) {
 }
 
 function PairsTab() {
-  const { data, loading } = useApi<PairsResponse>("/fx/pairs", { poll: 5000 });
+  const { data, loading, error, reload } = useApi<PairsResponse>("/fx/pairs", { poll: 5000 });
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={7} />;
-  if (!data) return <EmptyState title="取得できません" />;
+  if (!data) return <EmptyState title="通貨ペアを取得できません" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
   return (
     <div className="space-y-4">
       {!data.connector_online && (
@@ -188,9 +188,9 @@ function ChartTab() {
 /* ----------------------------------------------------------- 保有・履歴 */
 type PositionsRes = { connector_online: boolean; last_seen: string | null; equity: number | null; account: string | null; connector_positions: ConnectorPosition[]; trades: TradeRow[] };
 function PositionsTab() {
-  const { data, loading } = useApi<PositionsRes>("/fx/positions", { poll: 5000 });
+  const { data, loading, error, reload } = useApi<PositionsRes>("/fx/positions", { poll: 5000 });
   if (loading && !data) return <PageSkeleton cards={3} />;
-  if (!data) return <EmptyState title="取得できません" />;
+  if (!data) return <EmptyState title="保有を取得できません" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
   return (
     <div className="space-y-6">
       <Card className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -240,6 +240,7 @@ function TradesTab() {
   const trades = useApi<{ trades: TradeRow[] }>(`/fx/trades${status === "all" ? "" : `?status=${status}`}`, { poll: 30_000 });
   const perf = useApi<PerformanceResponse>("/fx/performance", { poll: 60_000 });
   if (!trades.data && trades.loading) return <PageSkeleton cards={3} />;
+  if (!trades.data) return <EmptyState title="取引履歴を取得できません" hint={trades.error ?? undefined} action={<Button onClick={() => trades.reload()}>再読み込み</Button>} />;
   return (
     <div className="space-y-6">
       <Section title="実取引の成績（現行3ルール）">
@@ -280,7 +281,7 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
   const [form, setForm] = useState<FxSettings | null>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (settings.data && !form) setForm(settings.data); }, [settings.data, form]);
-  if (!form) return <PageSkeleton cards={2} />;
+  if (!form) return settings.error ? <EmptyState title="設定を取得できません" hint={settings.error} action={<Button onClick={() => settings.reload()}>再読み込み</Button>} /> : <PageSkeleton cards={2} />;
   const save = async () => {
     setSaving(true);
     try { const saved = await api.put<FxSettings>("/fx/settings", form); setForm(saved); settings.setData(saved); toast("保存しました。共通lotはWindowsの次回同期後の新規取引から反映されます", "success"); reloadStatus(); }
@@ -311,7 +312,7 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
             <Field label="日次 損失制限 (R)"><Input type="number" step="0.5" max="0" value={form.r_limits.day} onChange={(e) => setForm({ ...form, r_limits: { ...form.r_limits, day: num(e.target.value, -2) } })} /></Field>
             <Field label="週次 損失制限 (R)"><Input type="number" step="0.5" max="0" value={form.r_limits.week} onChange={(e) => setForm({ ...form, r_limits: { ...form.r_limits, week: num(e.target.value, -3) } })} /></Field>
             <Field label="月次 損失制限 (R)"><Input type="number" step="0.5" max="0" value={form.r_limits.month} onChange={(e) => setForm({ ...form, r_limits: { ...form.r_limits, month: num(e.target.value, -2) } })} /></Field>
-            <Field label="自動停止理由（メモ）" className="col-span-2" hint="1行に1件。端末側の停止理由は接続状態に表示されます"><Input value={form.stop_reasons.join("\n")} onChange={(e) => setForm({ ...form, stop_reasons: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} /></Field>
+            <Field label="自動停止理由（メモ）" className="col-span-2" hint="1行に1件。端末側の停止理由は接続状態に表示されます"><Textarea rows={3} value={form.stop_reasons.join("\n")} onChange={(e) => setForm({ ...form, stop_reasons: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} data-testid="fx-stop-reasons" /></Field>
             <div className="col-span-2 flex justify-end"><Button variant="primary" onClick={save} loading={saving} data-testid="fx-save-settings">保存</Button></div>
           </Card>
         </Section>

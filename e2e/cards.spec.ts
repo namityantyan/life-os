@@ -30,3 +30,16 @@ test("cards: set budget, add transaction, totals update, statement add + confirm
   await expect(row).toContainText("56,789円");
   await expect(row).toContainText("確認済み");
 });
+
+test("cards: statement CSV lines do not inflate the month total (API)", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const before = (await (await page.request.get("/api/cards/overview")).json()) as { month_total: number; month: string; today: string };
+  const csv = `${before.today.replace(/-/g, "/")},E2E明細店,12345\n合計,,12345\n`;
+  const r = await page.request.post("/api/cards/import/csv", { headers: H, data: { csv, billing_month: before.month, debit_date: null } });
+  expect(r.ok()).toBeTruthy();
+  const st = (await r.json()) as { statement: { id: string } };
+  const after = (await (await page.request.get("/api/cards/overview")).json()) as { month_total: number; timeline: { source: string }[] };
+  expect(after.month_total).toBe(before.month_total);
+  expect(after.timeline.some((t) => t.source === "csv")).toBe(false);
+  await page.request.delete(`/api/cards/statements/${st.statement.id}`, { headers: H });
+});

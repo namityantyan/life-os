@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, setSetting, jstDate } from "../../core/db";
 import { notify } from "../../core/notify";
+import { validGmailToken } from "../cards/gmail";
 import { aggregateMonthly, computeTax, computeWithholding, detectInvoiceMail, DEFAULT_MAIL_RULES, previousMonth, reconcilePdfTotal, type MailRules } from "./logic";
 
 export const routes = new Hono<AppEnv>();
@@ -106,9 +107,9 @@ routes.post("/mail-rules/test", async (c) => {
 // ---- Gmail scan (requires an OAuth token stored by the settings/Gmail integration) ----
 type GmailToken = { access_token: string; expires_at?: string };
 export async function gmailToken(env: Env, userId: string): Promise<GmailToken | null> {
-  const row = await one<{ token_json: string }>(env.DB, "SELECT token_json FROM integration_tokens WHERE user_id=? AND provider='gmail'", userId);
-  if (!row) return null;
-  try { const t = JSON.parse(row.token_json) as GmailToken; return t.access_token ? t : null; } catch { return null; }
+  // Encrypted token written by 設定 → 接続; refreshed on expiry by the cards module helper.
+  try { const t = await validGmailToken(env, userId); return t?.access_token ? { access_token: t.access_token, expires_at: typeof t.expires_at === "string" ? t.expires_at : undefined } : null; }
+  catch { return null; }
 }
 export type GmailMessage = { id: string; subject: string; from: string; date: string; snippet: string };
 export async function gmailSearch(token: string, query: string, max = 30): Promise<GmailMessage[]> {

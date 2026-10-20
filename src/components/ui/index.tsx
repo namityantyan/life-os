@@ -25,9 +25,9 @@ export function IconButton({ className, children, label, ...rest }: ButtonHTMLAt
 }
 
 /* ---------- Surfaces ---------- */
-export function Card({ className, children, onClick, padded = true, as = "div" }: { className?: string; children: ReactNode; onClick?: () => void; padded?: boolean; as?: "div" | "section" }) {
+export function Card({ className, children, onClick, padded = true, as = "div", "data-testid": testId }: { className?: string; children: ReactNode; onClick?: () => void; padded?: boolean; as?: "div" | "section"; "data-testid"?: string }) {
   const Tag = as;
-  return <Tag onClick={onClick} className={cx("card", padded && "p-5", onClick && "pressable cursor-pointer hover:brightness-[1.02]", className)}>{children}</Tag>;
+  return <Tag onClick={onClick} data-testid={testId} className={cx("card", padded && "p-5", onClick && "pressable cursor-pointer hover:brightness-[1.02]", className)}>{children}</Tag>;
 }
 export function Section({ title, action, children, className }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -133,7 +133,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback((text: string, tone: Toast["tone"] = "neutral") => { const id = Date.now() + Math.random(); setItems((s) => [...s, { id, text, tone }]); setTimeout(() => setItems((s) => s.filter((t) => t.id !== id)), 3200); }, []);
   return (
     <ToastCtx.Provider value={push}>{children}
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none">
+      <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] md:bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none">
         <AnimatePresence>{items.map((t) => (
           <motion.div key={t.id} role="status" initial={{ y: 16, opacity: 0, scale: 0.95 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 8, opacity: 0, scale: 0.95 }} className={cx("glass rounded-full px-4 py-2 text-sm font-medium shadow-[var(--shadow-pop)]", t.tone === "error" && "text-red", t.tone === "success" && "text-green")}>{t.text}</motion.div>
         ))}</AnimatePresence>

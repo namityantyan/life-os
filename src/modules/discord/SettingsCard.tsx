@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { Badge, Button, Card, ChatPanel, Skeleton, useToast, type ChatMsg } from "@/components/ui";
 import { api, useApi, fmtDateTime } from "@/lib/api";
 
@@ -21,9 +21,9 @@ type Simulate = { message: string; provider?: string; action: string };
  * Shows configuration/link status, issues one-time link codes, registers slash commands,
  * and previews the bot through POST /api/discord/simulate (same handler as /chat).
  */
-export function DiscordSettingsCard() {
+export function DiscordSettingsCard(): ReactElement | null {
   const toast = useToast();
-  const { data, loading, reload } = useApi<Status>("/discord/status");
+  const { data, loading, reload, error } = useApi<Status>("/discord/status");
   const [code, setCode] = useState<LinkCode | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
@@ -58,7 +58,7 @@ export function DiscordSettingsCard() {
   };
 
   if (loading && !data) return <Skeleton className="h-40" />;
-  if (!data) return null;
+  if (!data) return <div data-testid="discord-card"><Card className="text-sm text-red flex items-center justify-between gap-3"><span>Discord BOTの状態を取得できませんでした{error ? `（${error}）` : ""}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></Card></div>;
   const conf = data.configured;
 
   return (
@@ -116,7 +116,7 @@ export function DiscordSettingsCard() {
       {data.channels.length > 0 && (
         <div className="text-sm">
           <span className="text-xs text-label-2 font-medium block">会話用チャンネル</span>
-          <ul className="text-xs text-label-2 space-y-0.5">{data.channels.map((ch) => <li key={ch.guild_id}>guild {ch.guild_id} → channel {ch.channel_id}（{fmtDateTime(ch.updated_at)}）</li>)}</ul>
+          <ul className="text-xs text-label-2 space-y-0.5">{data.channels.map((ch) => <li key={ch.guild_id}>サーバー <code>{ch.guild_id}</code> → チャンネル <code>{ch.channel_id}</code>（{fmtDateTime(ch.updated_at)}）</li>)}</ul>
         </div>
       )}
 

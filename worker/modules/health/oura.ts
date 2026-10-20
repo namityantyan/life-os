@@ -1,17 +1,15 @@
 import type { Env } from "../../env";
-import { one, run } from "../../core/db";
+import { run } from "../../core/db";
+import { loadToken } from "../assets/freee";
 import { normalizeOura } from "./logic";
 
 const BASE = "https://api.ouraring.com/v2/usercollection";
 
 async function resolveToken(env: Env, userId: string): Promise<string | null> {
   if (env.OURA_ACCESS_TOKEN) return env.OURA_ACCESS_TOKEN;
-  const row = await one<{ token_json: string }>(env.DB, "SELECT token_json FROM integration_tokens WHERE user_id=? AND provider='oura'", userId);
-  if (!row) return null;
-  try {
-    const t = JSON.parse(row.token_json) as { access_token?: string; token?: string };
-    return t.access_token ?? t.token ?? null;
-  } catch { return null; }
+  // Stored encrypted by 設定 → 接続 (integrations module); shared helper in assets/freee.ts.
+  const t = (await loadToken(env, userId, "oura")) as unknown as { access_token?: string; token?: string } | null;
+  return t?.access_token ?? t?.token ?? null;
 }
 
 async function fetchCollection<T>(token: string, name: string, start: string, end: string): Promise<T[]> {

@@ -99,3 +99,19 @@ test("training: natural-text logging through the API is reflected in records (bo
   await expect(row.getByTestId("record-weight")).toHaveText("—");
   await expect(row.getByTestId("record-1rm")).toHaveText("—");
 });
+
+test("training: a client-supplied unit cannot turn a weighted exercise into bodyweight (weight kept, unit from catalog)", async ({ authed: page }) => {
+  await closeOpenSession(page);
+  const start = await page.request.post("/api/training/sessions", { headers: H, data: { part: "胸" } });
+  const { session } = (await start.json()) as { session: { id: string } };
+  const r = await page.request.post(`/api/training/sessions/${session.id}/sets`, { headers: H, data: { exercise_key: "bench_press", weight: 40, reps: 5, unit: "bodyweight" } });
+  expect(r.status()).toBe(201);
+  const { set } = (await r.json()) as { set: { id: string; unit: string; weight: number | null } };
+  expect(set.unit).toBe("total");
+  expect(set.weight).toBe(40);
+  // weighted set without a weight is rejected instead of being stored as "—"
+  const bad = await page.request.post(`/api/training/sessions/${session.id}/sets`, { headers: H, data: { exercise_key: "bench_press", reps: 5 } });
+  expect(bad.status()).toBe(400);
+  await page.request.delete(`/api/training/sets/${set.id}`, { headers: H });
+  await page.request.delete(`/api/training/sessions/${session.id}`, { headers: H });
+});

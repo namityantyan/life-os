@@ -21,7 +21,7 @@ export async function buildLifeContext(env: Env, userId: string, opts: { weather
     one<{ n: number }>(env.DB, "SELECT COUNT(*) n FROM planner_items WHERE user_id=? AND type='task' AND done_at IS NULL AND archived_at IS NULL", userId),
     all<{ title: string; start_at: string | null }>(env.DB, "SELECT title,start_at FROM planner_items WHERE user_id=? AND type='event' AND archived_at IS NULL AND substr(start_at,1,10)=? ORDER BY start_at", userId, today),
     one<{ n: number }>(env.DB, "SELECT COUNT(*) n FROM planner_items WHERE user_id=? AND type='reminder' AND reminded_at IS NULL AND remind_at IS NOT NULL AND archived_at IS NULL", userId),
-    one<{ total: number | null }>(env.DB, "SELECT SUM(amount) total FROM card_transactions WHERE user_id=? AND status!='cancelled' AND substr(used_at,1,7)=?", userId, today.slice(0, 7)),
+    one<{ total: number | null }>(env.DB, "SELECT SUM(amount) total FROM card_transactions WHERE user_id=? AND status!='cancelled' AND source!='csv' AND substr(used_at,1,7)=?", userId, today.slice(0, 7)),
     all<{ category: string; content: string }>(env.DB, "SELECT category,content FROM notes WHERE user_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 30", userId),
     one<Record<string, unknown>>(env.DB, "SELECT checkup_date,ldl,hdl,tg,total_chol,hba1c,fasting_glucose,bp_sys,bp_dia,ggtp,ast,alt,uric_acid,creatinine FROM checkups WHERE user_id=? ORDER BY checkup_date DESC LIMIT 1", userId),
     all<{ nutrition_json: string | null }>(env.DB, "SELECT nutrition_json FROM meal_routines WHERE user_id=?", userId),

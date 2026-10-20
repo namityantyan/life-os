@@ -40,6 +40,20 @@ export function ensureFrontMatter(markdown: string, meta: IdeaMeta): string {
   return `${buildFrontMatter(meta)}\n\n${body.trim()}\n`;
 }
 
+/** Tags from an existing front matter block (`tags: ["a", "b"]`), so a re-sync does not drop them. */
+export function readFrontMatterTags(markdown: string): string[] {
+  const m = markdown.trimStart().match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return [];
+  const line = m[1].split("\n").find((l) => l.startsWith("tags:"));
+  if (!line) return [];
+  return [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((x) => x[1].replace(/\\(.)/g, "$1")).filter(Boolean);
+}
+
+/** Re-sync title/status in the stored markdown's front matter after an edit (tags are preserved). */
+export function syncFrontMatter(markdown: string, meta: Omit<IdeaMeta, "tags">): string {
+  return ensureFrontMatter(markdown, { ...meta, tags: readFrontMatterTags(markdown) });
+}
+
 /** Safe .md filename derived from the title (keeps Japanese, strips path/OS-unsafe chars). */
 export function slugFilename(title: string, ext = ".md"): string {
   const s = title.normalize("NFC").replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);

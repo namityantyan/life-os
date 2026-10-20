@@ -28,9 +28,9 @@ export async function runScheduled(env: Env, cron: string) {
 }
 
 async function fireDueReminders(env: Env, userId: string) {
-  const due = await all<{ id: string; title: string; notes: string | null }>(env.DB, "SELECT id,title,notes FROM planner_items WHERE user_id=? AND type='reminder' AND reminded_at IS NULL AND archived_at IS NULL AND remind_at IS NOT NULL AND remind_at<=?", userId, new Date().toISOString());
+  const due = await all<{ id: string; title: string; notes: string | null; remind_at: string }>(env.DB, "SELECT id,title,notes,remind_at FROM planner_items WHERE user_id=? AND type='reminder' AND reminded_at IS NULL AND archived_at IS NULL AND remind_at IS NOT NULL AND remind_at<=?", userId, new Date().toISOString());
   for (const r of due) {
-    await notify(env, userId, { kind: "reminder", title: r.title, body: r.notes ?? undefined, url: "/planner", dedupeKey: `reminder:${r.id}` });
+    await notify(env, userId, { kind: "reminder", title: r.title, body: r.notes ?? undefined, url: "/planner", dedupeKey: `reminder:${r.id}:${r.remind_at}` });
     await run(env.DB, "UPDATE planner_items SET reminded_at=datetime('now') WHERE id=?", r.id);
   }
 }

@@ -19,7 +19,8 @@ export default function Page() {
   const reload = () => { ov.reload(true); statements.reload(true); insights.reload(true); };
   const gmailSync = async () => { setSyncing(true); try { const r = await api.post<{ connected: boolean; found: number; imported: number; errors: string[] }>("/cards/gmail/sync"); toast(r.connected ? `Gmailを確認しました（${r.found}件中 新規${r.imported}件）` : "Gmailは未接続です（設定からGoogle連携でgmail.readonlyを許可してください）", r.connected ? "success" : "error"); reload(); } catch (e: any) { toast(e.message, "error"); } finally { setSyncing(false); } };
   if (ov.loading && !ov.data) return <PageSkeleton />;
-  const o = ov.data!;
+  if (!ov.data) return <div><PageHeader title="カード利用" /><EmptyState title="カード利用を取得できません" hint={ov.error ?? undefined} action={<Button onClick={() => ov.reload()}>再読み込み</Button>} /></div>;
+  const o = ov.data;
   const g = o.guide;
   return (
     <div>
@@ -90,15 +91,16 @@ export default function Page() {
 function SettingsModal({ open, onClose, onSaved, notified }: { open: boolean; onClose: () => void; onSaved: () => void; notified: number }) {
   const toast = useToast();
   const [s, setS] = useState<CardSettings | null>(null);
-  useEffect(() => { if (open) api.get<CardSettings>("/cards/settings").then(setS); }, [open]);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (open) api.get<CardSettings>("/cards/settings").then(setS).catch((e: any) => toast(e.message, "error")); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const n = (v: string) => (v === "" ? null : Number(v));
-  const save = async () => { try { await api.put("/cards/settings", s); toast("設定を保存しました", "success"); onSaved(); onClose(); } catch (e: any) { toast(e.message, "error"); } };
+  const save = async () => { setSaving(true); try { await api.put("/cards/settings", s); toast("設定を保存しました", "success"); onSaved(); onClose(); } catch (e: any) { toast(e.message, "error"); } finally { setSaving(false); } };
   return (
-    <Modal open={open} onClose={onClose} title="カード設定" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} disabled={!s} data-testid="settings-save">保存</Button></>}>
+    <Modal open={open} onClose={onClose} title="カード設定" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} disabled={!s} loading={saving} data-testid="settings-save">保存</Button></>}>
       {s && <div className="grid grid-cols-2 gap-3">
         <Field label="月予算（円）"><Input inputMode="numeric" value={s.monthly_budget ?? ""} onChange={(e) => setS({ ...s, monthly_budget: n(e.target.value) })} data-testid="settings-budget" /></Field>
         <Field label="確保する現金（円）"><Input inputMode="numeric" value={s.reserve_cash ?? ""} onChange={(e) => setS({ ...s, reserve_cash: n(e.target.value) })} /></Field>
-        <Field label="確認済みの未払いカード額（円）" hint={`取得済みの通知額 ${fmtYen(notified)} 以上で確認`}><Input inputMode="numeric" value={s.unpaid_confirmed ?? ""} onChange={(e) => setS({ ...s, unpaid_confirmed: n(e.target.value) })} /></Field>
+        <Field label="確認済みの未払いカード額（円）" hint={`引落済みの明細より後の通知額 ${fmtYen(notified)} 以上で確認`}><Input inputMode="numeric" value={s.unpaid_confirmed ?? ""} onChange={(e) => setS({ ...s, unpaid_confirmed: n(e.target.value) })} /></Field>
         <Field label="次回の賞与予定日"><Input type="date" value={s.next_bonus_date ?? ""} onChange={(e) => setS({ ...s, next_bonus_date: e.target.value || null })} /></Field>
       </div>}
     </Modal>
@@ -108,12 +110,14 @@ function SettingsModal({ open, onClose, onSaved, notified }: { open: boolean; on
 function TxModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
   const toast = useToast();
   const [f, setF] = useState({ date: todayJst(), time: "12:00", merchant: "", amount: "", category: "" });
+  const [saving, setSaving] = useState(false);
   const save = async () => {
+    setSaving(true);
     try { await api.post("/cards/transactions", { used_at: `${f.date}T${f.time}:00+09:00`, merchant: f.merchant || null, amount: Number(f.amount), category: f.category || null }); toast("追加しました", "success"); onSaved(); onClose(); setF({ ...f, merchant: "", amount: "" }); }
-    catch (e: any) { toast(e.message, "error"); }
+    catch (e: any) { toast(e.message, "error"); } finally { setSaving(false); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="利用を追加" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} disabled={!f.amount} data-testid="tx-submit">追加</Button></>}>
+    <Modal open={open} onClose={onClose} title="利用を追加" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} disabled={!f.amount} loading={saving} data-testid="tx-submit">追加</Button></>}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="利用日"><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
         <Field label="時刻"><Input type="time" value={f.time} onChange={(e) => setF({ ...f, time: e.target.value })} /></Field>
@@ -131,13 +135,15 @@ function StatementsSection({ statements, onChanged }: { statements: CardStatemen
   const [mode, setMode] = useState<"manual" | "csv">("manual");
   const [f, setF] = useState({ billing_month: todayJst().slice(0, 7), amount: "", debit_date: "", csv: "" });
   const [preview, setPreview] = useState<{ valid: boolean; total: number | null; lines_total: number; lines: unknown[]; errors: string[] } | null>(null);
+  const [saving, setSaving] = useState(false);
   const check = async () => { try { setPreview(await api.post("/cards/import/csv", { csv: f.csv, billing_month: f.billing_month, debit_date: f.debit_date || null, dry_run: true })); } catch (e: any) { setPreview(e.detail ?? { valid: false, total: null, lines_total: 0, lines: [], errors: [e.message] }); } };
   const save = async () => {
+    setSaving(true);
     try {
       if (mode === "csv") await api.post("/cards/import/csv", { csv: f.csv, billing_month: f.billing_month, debit_date: f.debit_date || null });
       else await api.post("/cards/statements", { billing_month: f.billing_month, amount: Number(f.amount), debit_date: f.debit_date || null, confirmed: true });
       toast("明細を登録しました", "success"); setOpen(false); setPreview(null); onChanged();
-    } catch (e: any) { toast(e.message, "error"); }
+    } catch (e: any) { toast(e.message, "error"); } finally { setSaving(false); }
   };
   const patch = async (s: CardStatement, body: Partial<{ confirmed: boolean; paid: boolean; debit_date: string | null }>) => { await api.put(`/cards/statements/${s.id}`, body); onChanged(); };
   return (
@@ -162,7 +168,7 @@ function StatementsSection({ statements, onChanged }: { statements: CardStatemen
           ))}
         </div></Card>
       )}
-      <Modal open={open} onClose={() => setOpen(false)} title="確定明細を登録" wide={mode === "csv"} footer={<><Button onClick={() => setOpen(false)}>キャンセル</Button>{mode === "csv" && <Button onClick={check} disabled={!f.csv.trim()}>検証</Button>}<Button variant="primary" onClick={save} disabled={mode === "csv" ? !f.csv.trim() : !f.amount} data-testid="statement-submit">登録</Button></>}>
+      <Modal open={open} onClose={() => setOpen(false)} title="確定明細を登録" wide={mode === "csv"} footer={<><Button onClick={() => setOpen(false)}>キャンセル</Button>{mode === "csv" && <Button onClick={check} disabled={!f.csv.trim()}>検証</Button>}<Button variant="primary" onClick={save} disabled={mode === "csv" ? !f.csv.trim() : !f.amount} loading={saving} data-testid="statement-submit">登録</Button></>}>
         <div className="grid grid-cols-2 gap-3">
           <Field label="登録方法" className="col-span-2"><Select value={mode} onChange={(e) => setMode(e.target.value as any)}><option value="manual">請求額を入力</option><option value="csv">CSV明細を取り込む</option></Select></Field>
           <Field label="請求月"><Input type="month" value={f.billing_month} onChange={(e) => setF({ ...f, billing_month: e.target.value })} data-testid="statement-month" /></Field>

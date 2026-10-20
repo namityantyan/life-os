@@ -117,7 +117,7 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
     try { const r = await api.post<{ item: PressureLog; weather_available: boolean }>("/health/pressure/logs", {}); toast(r.weather_available ? "記録しました" : "記録しました（気圧は未取得）", "success"); reload(); }
     catch (e: any) { toast(e?.message ?? "記録に失敗しました", "error"); } finally { setLogging(false); }
   };
-  const del = async (id: string) => { await api.del(`/health/pressure/logs/${id}`); toast("削除しました"); reload(); };
+  const del = async (id: string) => { try { await api.del(`/health/pressure/logs/${id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   const chartData = data.series.map((r) => ({ day: r.day.slice(5).replace("-", "/"), value: r[metric] }));
   const p = data.weather?.pressure ?? null;
   const personal = data.personal;
@@ -134,7 +134,7 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
           </div>
           {!data.oura_configured && !o && <p className="text-sm text-label-2">Ouraのアクセストークンが未設定のため、同期できません。</p>}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-5">
-            <Stat label="睡眠時間" value={fmtSleep(o?.sleep_duration_sec)} hint="h:m" />
+            <Stat label="睡眠時間" value={fmtSleep(o?.sleep_duration_sec)} hint="時間:分" />
             <Stat label="睡眠スコア" value={fmtNum(o?.sleep_score)} />
             <Stat label="コンディション" value={fmtNum(o?.readiness_score)} />
             <Stat label="歩数" value={fmtNum(o?.steps)} />
@@ -217,7 +217,8 @@ function PressureLogModal({ log, onClose, onSaved }: { log: PressureLog | null; 
   const [symptom, setSymptom] = useState(""); const [severity, setSeverity] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => { setSymptom(log?.symptom ?? ""); setSeverity(log?.severity != null ? String(log.severity) : ""); }, [log]);
-  const save = async () => { if (!log) return; setSaving(true); try { await api.patch(`/health/pressure/logs/${log.id}`, { symptom: symptom.trim() || null, severity: numOrNull(severity) }); onSaved(); } finally { setSaving(false); } };
+  const toast = useToast();
+  const save = async () => { if (!log) return; setSaving(true); try { await api.patch(`/health/pressure/logs/${log.id}`, { symptom: symptom.trim() || null, severity: numOrNull(severity) }); onSaved(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); } };
   return (
     <Modal open={Boolean(log)} onClose={onClose} title="記録を編集" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} loading={saving} data-testid="pressure-log-save">保存</Button></>}>
       <div className="space-y-3">
@@ -239,6 +240,7 @@ function MealTab() {
   const [targetsOpen, setTargetsOpen] = useState(false);
   const [estimating, setEstimating] = useState<string | null>(null);
   const [showExtra, setShowExtra] = useState(false);
+  const [applying, setApplying] = useState(false);
   const reload = () => meals.reload(true);
   if (meals.loading && !meals.data) return <PageSkeleton cards={3} />;
   const d = meals.data; if (!d) return <EmptyState title="読み込めませんでした" hint={meals.error ?? undefined} />;
@@ -257,9 +259,11 @@ function MealTab() {
       else if (r.reason === "ai_unavailable") toast("AIに接続できないため推定できません", "error");
     } catch (e: any) { toast(e?.message ?? "推定に失敗しました", "error"); } finally { setEstimating(null); }
   };
-  const del = async (m: Meal) => { await api.del(`/health/meals/${m.id}`); toast("削除しました"); reload(); };
-  const applyTargets = async (t: Nutrition) => { await api.put("/health/targets", t); toast("目標を保存しました", "success"); reload(); };
+  const del = async (m: Meal) => { try { await api.del(`/health/meals/${m.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const applyTargets = async (t: Nutrition) => { setApplying(true); try { await api.put("/health/targets", t); toast("目標を保存しました", "success"); reload(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setApplying(false); } };
   const applyEstimates = async (ests: { food_name: string; nutrition: Nutrition }[]) => {
+    setApplying(true);
+    try {
     let n = 0;
     for (const e of ests) {
       const m = d.items.find((x) => x.food_name === e.food_name); if (!m) continue;
@@ -268,6 +272,7 @@ function MealTab() {
       if (r.applied) n++;
     }
     toast(n ? `${n}件に反映しました` : "反映できる項目がありませんでした", n ? "success" : "neutral"); reload();
+    } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setApplying(false); }
   };
   const prop = chat.lastProposal as { targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[] } | null;
 
@@ -329,8 +334,8 @@ function MealTab() {
         <h2 className="text-lg font-semibold tracking-tight mb-2">食事チャット</h2>
         <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="目標や不足分を相談…" emptyHint="ルーティンと目標をもとに、目標案や推定値を提案します。"
           actions={prop ? <>
-            {prop.targets && <Button size="sm" variant="tinted" onClick={() => applyTargets(prop.targets!)} data-testid="apply-targets">この目標を使う</Button>}
-            {prop.estimates && prop.estimates.length > 0 && <Button size="sm" variant="tinted" onClick={() => applyEstimates(prop.estimates!)} data-testid="apply-estimates">推定値を反映（{prop.estimates.length}件）</Button>}
+            {prop.targets && <Button size="sm" variant="tinted" loading={applying} onClick={() => applyTargets(prop.targets!)} data-testid="apply-targets">この目標を使う</Button>}
+            {prop.estimates && prop.estimates.length > 0 && <Button size="sm" variant="tinted" loading={applying} onClick={() => applyEstimates(prop.estimates!)} data-testid="apply-estimates">推定値を反映（{prop.estimates.length}件）</Button>}
           </> : undefined} />
       </Card>
       <MealModal meal={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />
@@ -420,12 +425,13 @@ function BeautyTab() {
   const data = useApi<{ items: Beauty[]; policy: Policy }>("/health/beauty");
   const chat = useChat("beauty");
   const [editing, setEditing] = useState<Beauty | "new" | null>(null);
+  const [applying, setApplying] = useState(false);
   const reload = () => data.reload(true);
   if (data.loading && !data.data) return <PageSkeleton cards={3} />;
   const d = data.data; if (!d) return <EmptyState title="読み込めませんでした" hint={data.error ?? undefined} />;
   const prop = chat.lastProposal as { keep: string[]; add: string[]; review: string[] } | null;
-  const applyPolicy = async (p: { keep: string[]; add: string[]; review: string[] }) => { await api.put("/health/beauty/policy", p); toast("方針を保存しました", "success"); reload(); };
-  const del = async (b: Beauty) => { await api.del(`/health/beauty/${b.id}`); toast("削除しました"); reload(); };
+  const applyPolicy = async (p: { keep: string[]; add: string[]; review: string[] }) => { setApplying(true); try { await api.put("/health/beauty/policy", p); toast("方針を保存しました", "success"); reload(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setApplying(false); } };
+  const del = async (b: Beauty) => { try { await api.del(`/health/beauty/${b.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   const PolicyList = ({ title, items, tone }: { title: string; items: string[]; tone: "green" | "accent" | "orange" }) => (
     <div><div className="flex items-center gap-2 mb-1"><Badge tone={tone}>{title}</Badge></div>{items.length ? <ul className="text-sm space-y-0.5">{items.map((s, i) => <li key={i}>・{s}</li>)}</ul> : <div className="text-sm text-label-3">なし</div>}</div>
   );
@@ -459,7 +465,7 @@ function BeautyTab() {
       <Card as="section" className="xl:col-span-1 flex flex-col">
         <h2 className="text-lg font-semibold tracking-tight mb-2">美容チャット</h2>
         <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="ケアの見直しを相談…" emptyHint="睡眠・食事・活動・検診も参照して、続けること・追加候補・見直すことを提案します。"
-          actions={prop ? <Button size="sm" variant="tinted" onClick={() => applyPolicy(prop)} data-testid="apply-policy">この方針を使う</Button> : undefined} />
+          actions={prop ? <Button size="sm" variant="tinted" loading={applying} onClick={() => applyPolicy(prop)} data-testid="apply-policy">この方針を使う</Button> : undefined} />
       </Card>
       <BeautyModal item={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />
     </div>
@@ -501,7 +507,8 @@ function CheckupTab() {
   const [saving, setSaving] = useState(false);
   const reload = () => data.reload(true);
   if (data.loading && !data.data) return <PageSkeleton cards={2} />;
-  const items = data.data?.items ?? [];
+  if (!data.data) return <EmptyState title="読み込めませんでした" hint={data.error ?? undefined} />;
+  const items = data.data.items;
   const save = async () => {
     const body: Record<string, unknown> = { checkup_date: f.checkup_date, notes: f.notes?.trim() || null };
     for (const c of CHECKUP_FIELDS) body[c.key] = numOrNull(f[c.key] ?? "");
@@ -509,7 +516,7 @@ function CheckupTab() {
     try { await api.post("/health/checkups", body); toast("保存しました", "success"); setF({ checkup_date: f.checkup_date }); reload(); }
     catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
   };
-  const del = async (c: Checkup) => { if (!confirm(`${c.checkup_date} の検診記録を削除しますか？`)) return; await api.del(`/health/checkups/${c.id}`); toast("削除しました"); reload(); };
+  const del = async (c: Checkup) => { if (!confirm(`${c.checkup_date} の検診記録を削除しますか？`)) return; try { await api.del(`/health/checkups/${c.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   return (
     <div className="space-y-4">
       <Card as="section" className="space-y-4">

@@ -1,12 +1,34 @@
 // Pure logic for the カード利用 module: totals, guide rule, SMBC mail parsing, statement CSV validation.
 import type { SpendGuide } from "@shared/cards";
 
-export type TxLike = { used_at: string; amount: number; status?: string };
-const active = (t: TxLike) => t.status !== "cancelled";
+export type TxLike = { used_at: string; amount: number; status?: string; source?: string };
+/**
+ * "Usage" rows are the approval notifications (gmail) and manual entries. Statement CSV lines
+ * (source 'csv') describe the closed billing and would double-count the same purchases, so they
+ * never enter the month total / cumulative chart / timeline.
+ */
+export const isUsage = (t: TxLike) => t.status !== "cancelled" && t.source !== "csv";
+const active = isUsage;
 
-/** Sum of non-cancelled transactions in YYYY-MM (used_at in JST ISO or date). */
+/** Sum of non-cancelled usage (non-CSV) transactions in YYYY-MM (used_at in JST ISO or date). */
 export function monthTotal(txs: TxLike[], month: string): number {
   return txs.filter((t) => active(t) && t.used_at.slice(0, 7) === month).reduce((s, t) => s + t.amount, 0);
+}
+
+export type StatementLike = { paid: number | boolean; debit_date: string | null; billing_month: string };
+/**
+ * Lower bound of notified-but-unpaid card usage: usage notifications dated after the latest paid
+ * statement's debit date (or, without a debit date, after the end of its billing month). Usage before
+ * that may already be settled, so it is not counted; nothing is ever assumed paid without a paid statement.
+ */
+export function notifiedUnpaidTotal(txs: TxLike[], statements: StatementLike[]): number {
+  let cutoff = "";
+  for (const s of statements) {
+    if (!s.paid) continue;
+    const edge = s.debit_date ?? `${lastDayOf(s.billing_month)}T23:59:59+09:00`;
+    if (edge > cutoff) cutoff = edge;
+  }
+  return txs.filter((t) => active(t) && (!cutoff || t.used_at.slice(0, 10) > cutoff.slice(0, 10))).reduce((s, t) => s + t.amount, 0);
 }
 export function budgetLeft(budget: number | null, total: number): number | null {
   return budget == null ? null : budget - total;

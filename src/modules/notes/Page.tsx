@@ -29,7 +29,7 @@ export default function Page() {
   if (debounced) params.set("q", debounced);
   const qs = params.toString();
   const query = `/notes${qs ? `?${qs}` : ""}`;
-  const { data, loading, reload } = useApi<{ items: Note[] }>(query);
+  const { data, loading, error, reload } = useApi<{ items: Note[] }>(query);
   useEffect(() => { if (!loading && data) setFirstLoad(false); }, [loading, data]);
 
   const add = async () => {
@@ -46,6 +46,7 @@ export default function Page() {
     <div>
       <PageHeader title="メモ" subtitle="方針・決定・約束・好みを短く残す場所。" />
 
+      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
       <Card className="mb-6">
         <div className="flex flex-wrap gap-1.5 mb-3" role="radiogroup" aria-label="種類">
           {CATEGORIES.map((c) => (
@@ -67,7 +68,7 @@ export default function Page() {
         <label className="flex items-center gap-2 text-sm text-label-2 ml-auto" data-testid="note-archived-toggle">アーカイブ<Toggle checked={archived} onChange={setArchived} label="アーカイブを表示" /></label>
       </div>
 
-      {groups.length === 0 ? (
+      {error && !data ? null : groups.length === 0 ? (
         <EmptyState title={archived ? "アーカイブはありません" : debounced ? "該当するメモはありません" : "メモはまだありません"} />
       ) : (
         <Stagger className="space-y-6" key={query}>

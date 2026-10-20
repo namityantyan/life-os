@@ -13,3 +13,21 @@ test("mobile drawer opens from menu button and navigates", async ({ authed: page
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   expect(overflow).toBeFalsy();
 });
+
+test("mobile bottom tab bar navigates and shows the active indicator", async ({ authed: page }) => {
+  await expect(page.getByTestId("tabbar")).toBeVisible();
+  await expect(page.getByTestId("tab-dashboard").getByTestId("tab-indicator")).toBeVisible();
+  await page.getByTestId("tab-health").click();
+  await expect(page).toHaveURL(/\/health/);
+  await expect(page.getByTestId("tab-health").getByTestId("tab-indicator")).toBeVisible();
+  await expect(page.getByTestId("tab-dashboard").getByTestId("tab-indicator")).toHaveCount(0);
+  await page.getByTestId("tab-training").click();
+  await expect(page).toHaveURL(/\/training/);
+  // palette via header button works on mobile too
+  await page.getByTestId("palette-button").click();
+  await expect(page.getByTestId("command-palette")).toBeVisible();
+  await page.getByTestId("palette-item-mod-cards").click();
+  await expect(page).toHaveURL(/\/cards/);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(overflow).toBeFalsy();
+});

@@ -1,22 +1,19 @@
 // Read-only Google Calendar (primary) fetch using a token stored in integration_tokens (provider 'google_calendar').
 import type { Env } from "../../env";
-import { one, run } from "../../core/db";
+import { loadToken as loadStored, saveToken as saveStored } from "../assets/freee";
 import { normalizeGoogleEvent, type GoogleEvent } from "./logic";
 
 export const PROVIDER = "google_calendar";
 
 type StoredToken = { access_token?: string; refresh_token?: string; expires_at?: string };
 
+// Stored encrypted (AES-GCM) by the integrations module; shared helpers live in assets/freee.ts.
 export async function loadToken(env: Env, userId: string): Promise<StoredToken | null> {
-  const row = await one<{ token_json: string }>(env.DB, "SELECT token_json FROM integration_tokens WHERE user_id=? AND provider=?", userId, PROVIDER);
-  if (!row) return null;
-  try { return JSON.parse(row.token_json) as StoredToken; } catch { return null; }
+  return (await loadStored(env, userId, PROVIDER)) as unknown as StoredToken | null;
 }
 
 async function saveToken(env: Env, userId: string, tok: StoredToken) {
-  await run(env.DB,
-    "INSERT INTO integration_tokens (user_id, provider, token_json, updated_at) VALUES (?,?,?,datetime('now')) ON CONFLICT(user_id,provider) DO UPDATE SET token_json=excluded.token_json, updated_at=datetime('now')",
-    userId, PROVIDER, JSON.stringify(tok));
+  await saveStored(env, userId, tok, PROVIDER);
 }
 
 async function refreshAccessToken(env: Env, userId: string, tok: StoredToken): Promise<string | null> {

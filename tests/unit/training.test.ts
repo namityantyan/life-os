@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { estimate1RM, pickBest, progressionAdvice, summarizeSession, hasWeightUnit } from "../../worker/modules/training/logic";
+import { estimate1RM, pickBest, progressionAdvice, summarizeSession, hasWeightUnit, normalizeSetInput } from "../../worker/modules/training/logic";
 import { parseTrainingText, findExercise, findPart } from "../../worker/modules/training/nlp";
 import { CATALOG, getExercise, searchCatalog, legacy_keys, canonicalKey, unitFor, PARTS } from "../../shared/training";
 
@@ -164,5 +164,37 @@ describe("nlp: parseTrainingText", () => {
     expect(findExercise("なし")).toBeNull();
     expect(findPart("お尻トレ")).toBe("尻");
     expect(findPart("腹筋")).toBe("腹");
+  });
+});
+
+describe("normalizeSetInput (unit always from the catalog)", () => {
+  it("keeps the catalog unit even when the client sends another one, so weights are not dropped", () => {
+    const bench = getExercise("bench_press")!;
+    expect(normalizeSetInput(bench, { weight: 100, reps: 5 })).toEqual({ unit: "total", weight: 100, reps: 5, duration_sec: null });
+    const db = getExercise("db_shoulder_press")!;
+    expect(normalizeSetInput(db, { weight: 12, reps: 10 }).unit).toBe("per_hand");
+    const smith = getExercise("smith_bench_press")!;
+    expect(normalizeSetInput(smith, { weight: 20, reps: 8 }).unit).toBe("plate");
+  });
+  it("bodyweight exercises never carry a weight; timed exercises carry seconds only", () => {
+    const pull = getExercise("pull_up")!;
+    expect(normalizeSetInput(pull, { weight: 100, reps: 9 })).toEqual({ unit: "bodyweight", weight: null, reps: 9, duration_sec: null });
+    const plank = CATALOG.find((e) => e.measurement === "seconds")!;
+    expect(normalizeSetInput(plank, { weight: 5, reps: 3, duration_sec: 45 })).toEqual({ unit: "time", weight: null, reps: null, duration_sec: 45 });
+  });
+  it("rejects missing reps / seconds / weight", () => {
+    expect(() => normalizeSetInput(getExercise("bench_press")!, { reps: 5 })).toThrow(/weight/);
+    expect(() => normalizeSetInput(getExercise("bench_press")!, { weight: 60 })).toThrow(/reps/);
+    expect(() => normalizeSetInput(getExercise("pull_up")!, {})).toThrow(/reps/);
+    expect(() => normalizeSetInput(CATALOG.find((e) => e.measurement === "seconds")!, {})).toThrow(/duration/);
+  });
+});
+
+describe("setInputMessage", () => {
+  it("explains what is missing in Japanese", async () => {
+    const { setInputMessage } = await import("../../worker/modules/training/logic");
+    expect(setInputMessage("weight required", "ベンチプレス")).toContain("重量が必要");
+    expect(setInputMessage("duration_sec required", "プランク")).toContain("秒数");
+    expect(setInputMessage("reps required", "懸垂")).toContain("回数が必要");
   });
 });

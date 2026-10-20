@@ -37,8 +37,10 @@ coreRoutes.get("/settings", async (c) => {
   const rows = await all<{ key: string; value_json: string }>(c.env.DB, "SELECT key,value_json FROM settings WHERE user_id=?", user.id);
   const settings: Record<string, unknown> = { notification_prefs: DEFAULT_PREFS };
   for (const r of rows) { try { settings[r.key] = JSON.parse(r.value_json); } catch { /* ignore */ } }
+  const stored = await all<{ provider: string }>(c.env.DB, "SELECT provider FROM integration_tokens WHERE user_id=?", user.id);
+  const has = (p: string) => stored.some((r) => r.provider === p);
   return c.json({ settings, vapidPublicKey: c.env.VAPID_PUBLIC_KEY ?? null, integrations: {
-    google: Boolean(c.env.GOOGLE_CLIENT_ID), oura: Boolean(c.env.OURA_ACCESS_TOKEN), freee: Boolean(c.env.FREEE_CLIENT_ID),
+    google: Boolean(c.env.GOOGLE_CLIENT_ID), oura: Boolean(c.env.OURA_ACCESS_TOKEN) || has("oura"), freee: Boolean(c.env.FREEE_CLIENT_ID), freee_connected: has("freee"), google_calendar: has("google_calendar"), gmail: has("gmail"),
     discord: Boolean(c.env.DISCORD_BOT_TOKEN), push: Boolean(c.env.VAPID_PUBLIC_KEY), backups: Boolean(c.env.BACKUP_INGEST_TOKEN), fx: Boolean(c.env.FX_CONNECTOR_TOKEN),
   } });
 });

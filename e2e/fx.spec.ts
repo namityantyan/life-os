@@ -111,11 +111,13 @@ test("heartbeat + setup signal + candles → 準備OK · BUY, chart renders, tra
   await expect(page.getByTestId("fx-install-md")).toContainText("lifeos_connector.py");
   const lot = page.getByTestId("fx-common-lot");
   await lot.fill("0.31");
+  await page.getByTestId("fx-stop-reasons").fill("理由A\n理由B");
   await page.getByTestId("fx-save-settings").click();
   await expect(page.getByText("保存しました", { exact: false })).toBeVisible();
   const s = await (await page.request.get("/api/fx/settings")).json();
   expect(s.common_lot).toBe(0.31);
+  expect(s.stop_reasons).toEqual(["理由A", "理由B"]);
   const perms = await (await page.request.get(`/api/integrations/fx/permissions?terminal_id=${TERMINAL}`, { headers: H() })).json();
   expect(perms.common_lot).toBe(0.31);
-  await page.request.put("/api/fx/settings", { headers: { Origin: "http://localhost:5173" }, data: { ...s, common_lot: 0.3 } });
+  await page.request.put("/api/fx/settings", { headers: { Origin: "http://localhost:5173" }, data: { ...s, common_lot: 0.3, stop_reasons: [] } });
 });

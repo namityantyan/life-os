@@ -5,6 +5,11 @@ import { MODULES, type ModuleKey } from "@shared/types";
 import { useAuth } from "./auth";
 import { cx, IconButton } from "@/components/ui";
 import { NotificationBell } from "./NotificationBell";
+import { CommandPalette } from "./CommandPalette";
+
+/** Modules reachable from the mobile bottom tab bar; everything else stays in the drawer. */
+const TAB_KEYS: ModuleKey[] = ["dashboard", "planner", "health", "training", "cards"];
+const TAB_SHORT: Partial<Record<ModuleKey, string>> = { dashboard: "ホーム", planner: "予定", health: "健康", training: "トレ", cards: "カード" };
 
 const ICONS: Record<ModuleKey, string> = {
   dashboard: "◉", planner: "▦", ideas: "✦", notes: "≡", health: "♥", training: "⚡", assets: "◈", cards: "▭", fx: "⇅", finance: "¥", royalty: "♪", backups: "☁", requests: "✎", settings: "⚙",
@@ -13,6 +18,7 @@ const ICONS: Record<ModuleKey, string> = {
 export function Shell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("lifeos.sidebar") === "1"; } catch { return false; } });
   const [drawer, setDrawer] = useState(false);
+  const [palette, setPalette] = useState(false);
   const loc = useLocation();
   const { user, logout } = useAuth();
   useEffect(() => { setDrawer(false); }, [loc.pathname]);
@@ -85,16 +91,38 @@ export function Shell({ children }: { children: ReactNode }) {
           <IconButton label="メニュー" className="md:hidden" onClick={() => setDrawer(true)} data-testid="menu-button">☰</IconButton>
           <div className="font-semibold tracking-tight md:text-label-2 md:font-medium">{current?.label ?? "Life OS"}</div>
           <div className="flex-1" />
+          <IconButton label="検索・コマンド（⌘K）" onClick={() => setPalette(true)} data-testid="palette-button">⌕</IconButton>
           <NotificationBell />
         </header>
-        <main className="flex-1 px-4 md:px-8 py-6 max-w-[1400px] w-full mx-auto">
+        <main className="flex-1 px-4 md:px-8 pt-6 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-6 max-w-[1400px] w-full mx-auto">
           <AnimatePresence mode="wait">
             <motion.div key={loc.pathname.split("/")[1]} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}>
               {children}
             </motion.div>
           </AnimatePresence>
         </main>
+
+        {/* Mobile bottom tab bar */}
+        <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 glass border-t border-separator pb-[env(safe-area-inset-bottom)]" aria-label="主要モジュール" data-testid="tabbar">
+          <ul className="grid grid-cols-5 h-14">
+            {TAB_KEYS.map((k) => {
+              const m = MODULES.find((x) => x.key === k)!;
+              return (
+                <li key={k} className="min-w-0">
+                  <NavLink to={m.path} end={m.path === "/"} data-testid={`tab-${k}`} aria-label={m.label} className={({ isActive }) => cx("relative h-full flex flex-col items-center justify-center gap-0.5 text-xs font-medium select-none", isActive ? "text-accent" : "text-label-2")}>
+                    {({ isActive }) => (<>
+                      {isActive && <motion.span layoutId="tab-active" data-testid="tab-indicator" className="absolute top-1 w-9 h-1 rounded-full bg-accent" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
+                      <span className="text-xl leading-none">{ICONS[k]}</span>
+                      <span className="truncate max-w-full">{TAB_SHORT[k] ?? m.label}</span>
+                    </>)}
+                  </NavLink>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
       </div>
+      <CommandPalette open={palette} onOpenChange={setPalette} />
     </div>
   );
 }

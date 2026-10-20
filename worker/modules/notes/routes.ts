@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../../env";
 import { all, one, run, newId } from "../../core/db";
+import { likePattern } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -18,7 +19,7 @@ routes.get("/", async (c) => {
   const where = ["user_id=?", archived ? "archived_at IS NOT NULL" : "archived_at IS NULL"];
   const params: unknown[] = [user.id];
   if (category && (NOTE_CATEGORIES as readonly string[]).includes(category)) { where.push("category=?"); params.push(category); }
-  if (q) { where.push("content LIKE ?"); params.push(`%${q}%`); }
+  if (q) { where.push("content LIKE ? ESCAPE '\\'"); params.push(likePattern(q)); }
   const items = await all<NoteRow>(c.env.DB, `SELECT ${COLS} FROM notes WHERE ${where.join(" AND ")} ORDER BY updated_at DESC LIMIT 500`, ...params);
   return c.json({ items });
 });

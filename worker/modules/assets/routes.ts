@@ -10,18 +10,21 @@ import { authorizeUrl, exchangeCode, freeeConfigured, loadToken, saveToken, dele
 
 export const routes = new Hono<AppEnv>();
 
-const accountSchema = z.object({
+const accountBase = z.object({
   name: z.string().min(1).max(80),
-  owner: z.string().min(1).max(80).default("personal"),
-  owner_type: z.enum(["personal", "corporate"]).default("personal"),
+  owner: z.string().min(1).max(80),
+  owner_type: z.enum(["personal", "corporate"]),
   category: z.enum(ASSET_CATEGORIES),
-  currency: z.string().min(1).max(10).default("JPY"),
+  currency: z.string().min(1).max(10),
   unit: z.string().max(20).nullable().optional(),
-  source: z.enum(["manual", "freee"]).default("manual"),
+  source: z.enum(["manual", "freee"]),
   freee_company_id: z.string().nullable().optional(),
   freee_walletable_id: z.string().nullable().optional(),
   sort_order: z.number().int().optional(),
 });
+const accountSchema = accountBase.extend({ owner: accountBase.shape.owner.default("personal"), owner_type: accountBase.shape.owner_type.default("personal"), currency: accountBase.shape.currency.default("JPY"), source: accountBase.shape.source.default("manual") });
+// Partial update: no defaults here, otherwise zod 4 would reset omitted fields (owner/currency/source) to their defaults.
+const accountPatchSchema = accountBase.partial().extend({ archived: z.boolean().optional() });
 
 const uid = (c: any) => c.get("user").id as string;
 
@@ -39,7 +42,7 @@ routes.post("/accounts", async (c) => {
   return c.json(await one(c.env.DB, "SELECT * FROM asset_accounts WHERE id=?", id), 201);
 });
 routes.put("/accounts/:id", async (c) => {
-  const b = accountSchema.partial().extend({ archived: z.boolean().optional() }).parse(await c.req.json());
+  const b = accountPatchSchema.parse(await c.req.json());
   const id = c.req.param("id");
   const cur = await one<AssetAccount>(c.env.DB, "SELECT * FROM asset_accounts WHERE id=? AND user_id=?", id, uid(c));
   if (!cur) return c.json({ error: "not found" }, 404);

@@ -46,7 +46,7 @@ export default function Page() {
 
 /* ====================== 記録 ====================== */
 function LogTab() {
-  const { data, loading, reload, setData } = useApi<Active>("/training/active");
+  const { data, loading, error, reload, setData } = useApi<Active>("/training/active");
   const toast = useToast();
   const nav = useNavigate();
   const [starting, setStarting] = useState<Part | null>(null);
@@ -73,7 +73,8 @@ function LogTab() {
   };
 
   if (loading && !data) return <PageSkeleton cards={3} />;
-  const session = data?.session ?? null;
+  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  const session = data.session;
 
   if (!session) {
     return (
@@ -93,10 +94,10 @@ function LogTab() {
   }
   return (
     <>
-      <ActiveSession session={session} sets={data?.sets ?? []} onChange={(sets) => setData({ session, sets })} onFinish={() => setFinishOpen(true)} />
+      <ActiveSession session={session} sets={data.sets} onChange={(sets) => setData({ session, sets })} onFinish={() => setFinishOpen(true)} />
       <Modal open={finishOpen} onClose={() => setFinishOpen(false)} title="トレーニングを終了"
         footer={<><Button onClick={() => setFinishOpen(false)}>戻る</Button><Button variant="primary" loading={finishing} onClick={finish} data-testid="finish-confirm">終了する</Button></>}>
-        <p className="text-sm text-label-2">{session.part}・{data?.sets.length ?? 0}セットを記録しました。終了すると履歴に保存され、通知にまとめが届きます。</p>
+        <p className="text-sm text-label-2">{session.part}・{data.sets.length}セットを記録しました。終了すると履歴に保存され、通知にまとめが届きます。</p>
       </Modal>
     </>
   );
@@ -282,7 +283,7 @@ function RestTimer({ seconds, startedAt, onChoose, onStop }: { seconds: 60 | 90 
   return (
     <Card as="section" className="flex flex-col items-center gap-4" >
       <div className="w-full flex items-center justify-between"><span className="text-sm font-semibold tracking-tight">休憩</span>
-        <Segmented<"60" | "90" | "120"> value={String(seconds) as "60" | "90" | "120"} onChange={(v) => onChoose(Number(v) as 60 | 90 | 120)} options={[{ value: "60", label: "60s" }, { value: "90", label: "90s" }, { value: "120", label: "120s" }]} />
+        <Segmented<"60" | "90" | "120"> value={String(seconds) as "60" | "90" | "120"} onChange={(v) => onChoose(Number(v) as 60 | 90 | 120)} options={[{ value: "60", label: "60秒" }, { value: "90", label: "90秒" }, { value: "120", label: "120秒" }]} />
       </div>
       <div className="relative size-36" data-testid="rest-timer" data-state={startedAt == null ? "idle" : done ? "done" : "running"}>
         <svg viewBox="0 0 128 128" className="size-full -rotate-90">
@@ -304,10 +305,11 @@ function RestTimer({ seconds, startedAt, onChoose, onStop }: { seconds: 60 | 90 
 
 /* ====================== 履歴 ====================== */
 function HistoryTab() {
-  const { data, loading } = useApi<{ items: TrainingSession[] }>("/training/sessions?limit=100");
+  const { data, loading, error, reload } = useApi<{ items: TrainingSession[] }>("/training/sessions?limit=100");
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={4} />;
-  const items = data?.items ?? [];
+  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  const items = data.items;
   if (items.length === 0) return <EmptyState title="履歴がありません" hint="記録タブからセッションを開始すると、ここに並びます。" />;
   return (
     <Section title="セッション">
@@ -334,11 +336,12 @@ function SessionDetail() {
   const toast = useToast();
   const { data, loading, error } = useApi<{ session: TrainingSession; sets: TrainingSet[] }>(id ? `/training/sessions/${id}` : null);
   const [delOpen, setDelOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   if (loading && !data) return <PageSkeleton cards={2} />;
-  if (error || !data) return <EmptyState title="セッションが見つかりません" action={<Button onClick={() => nav("/training/history")}>履歴へ戻る</Button>} />;
+  if (error || !data) return <EmptyState title="セッションが見つかりません" hint={error ?? undefined} action={<Button onClick={() => nav("/training/history")}>履歴へ戻る</Button>} />;
   const { session, sets } = data;
   const grouped = new Map<string, TrainingSet[]>(); for (const s of sets) { const a = grouped.get(s.exercise_key) ?? []; a.push(s); grouped.set(s.exercise_key, a); }
-  const remove = async () => { try { await api.del(`/training/sessions/${session.id}`); toast("削除しました"); nav("/training/history"); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const remove = async () => { setDeleting(true); try { await api.del(`/training/sessions/${session.id}`); toast("削除しました"); nav("/training/history"); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); setDeleting(false); } };
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => nav("/training/history")}>← 履歴</Button></div>
@@ -370,7 +373,7 @@ function SessionDetail() {
           ))}
         </Stagger>
       )}
-      <Modal open={delOpen} onClose={() => setDelOpen(false)} title="セッションを削除" footer={<><Button onClick={() => setDelOpen(false)}>戻る</Button><Button variant="danger" onClick={remove}>削除する</Button></>}>
+      <Modal open={delOpen} onClose={() => setDelOpen(false)} title="セッションを削除" footer={<><Button onClick={() => setDelOpen(false)}>戻る</Button><Button variant="danger" loading={deleting} onClick={remove}>削除する</Button></>}>
         <p className="text-sm text-label-2">このセッションと{sets.length}件のセットを削除します。元に戻せません。</p>
       </Modal>
     </div>
@@ -380,9 +383,9 @@ function SessionDetail() {
 function ExerciseHistory() {
   const { key } = useParams();
   const nav = useNavigate();
-  const { data, loading } = useApi<{ entry: CatalogEntry; sets: (TrainingSet & { started_at: string })[]; best: TrainingSet | null; est_1rm: { value: number; reference: boolean } | null }>(key ? `/training/exercises/${key}/history` : null);
+  const { data, loading, error } = useApi<{ entry: CatalogEntry; sets: (TrainingSet & { started_at: string })[]; best: TrainingSet | null; est_1rm: { value: number; reference: boolean } | null }>(key ? `/training/exercises/${key}/history` : null);
   if (loading && !data) return <PageSkeleton cards={2} />;
-  if (!data) return <EmptyState title="種目が見つかりません" action={<Button onClick={() => nav("/training/records")}>戻る</Button>} />;
+  if (!data) return <EmptyState title="種目が見つかりません" hint={error ?? undefined} action={<Button onClick={() => nav("/training/records")}>戻る</Button>} />;
   const bySession = new Map<string, (TrainingSet & { started_at: string })[]>(); for (const s of data.sets) { const a = bySession.get(s.session_id) ?? []; a.push(s); bySession.set(s.session_id, a); }
   return (
     <div className="space-y-5">
@@ -453,10 +456,11 @@ function CatalogTab() {
 
 /* ====================== 重量・1RM ====================== */
 function RecordsTab() {
-  const { data, loading } = useApi<{ items: ExerciseRecord[] }>("/training/records");
+  const { data, loading, error, reload } = useApi<{ items: ExerciseRecord[] }>("/training/records");
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={2} />;
-  const items = data?.items ?? [];
+  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  const items = data.items;
   if (items.length === 0) return <EmptyState title="記録がありません" hint="セットを記録すると、種目ごとの最高重量と推定1RMが並びます。" />;
   return (
     <Section title="種目別の最高記録" action={<span className="text-xs text-label-2">Epley式 重量×(1+回数÷30)。11回以上は参考値。自重・保持時間は「—」。</span>}>

@@ -66,6 +66,8 @@ publicRoutes.post("/interactions", async (c) => {
     }
     case "chathere": {
       if (!it.guildId || !it.channelId) return c.json(msg("サーバーのテキストチャンネル内で実行してください。"));
+      const existing = await getChannel(env, it.guildId);
+      if (existing && existing.user_id !== userId) return c.json(msg("このサーバーの会話用チャンネルは登録した所有者のみ変更できます。"));
       await setChannel(env, it.guildId, it.channelId, userId);
       return c.json(msg(`このチャンネル（<#${it.channelId}>）を会話用チャンネルに設定しました。\n注意: 現在の構成（Discord Interactions）では通常発言には反応できないため、会話は /chat を使ってください。`, false));
     }

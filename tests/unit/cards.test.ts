@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { monthTotal, budgetLeft, cumulativeSeries, extraSpendGuide, parseSmbcMail, parseStatementCsv } from "../../worker/modules/cards/logic";
+import { monthTotal, budgetLeft, cumulativeSeries, extraSpendGuide, parseSmbcMail, parseStatementCsv, notifiedUnpaidTotal, aggregateByMerchant } from "../../worker/modules/cards/logic";
 
 const txs = [
   { used_at: "2026-10-01T10:00:00+09:00", amount: 1000 },
@@ -56,5 +56,37 @@ describe("parseStatementCsv", () => {
   it("rejects mismatch and missing total", () => {
     expect(parseStatementCsv("2026/09/01,A,100\n2026/09/02,B,200\n合計,,999\n")).toMatchObject({ valid: false, errors: [expect.stringContaining("一致しません")] });
     expect(parseStatementCsv("2026/09/01,A,100\n")).toMatchObject({ valid: false, errors: [expect.stringContaining("合計行")] });
+  });
+});
+
+describe("statement CSV lines never double-count usage", () => {
+  const mixed = [
+    { used_at: "2026-10-02T10:00:00+09:00", amount: 1000, source: "gmail", merchant: "A" },
+    { used_at: "2026-10-02", amount: 1000, source: "csv", status: "confirmed", merchant: "A" }, // same purchase from the statement
+    { used_at: "2026-10-05T10:00:00+09:00", amount: 300, source: "manual", merchant: "B" },
+  ];
+  it("month total, series and merchant aggregation ignore source=csv", () => {
+    expect(monthTotal(mixed, "2026-10")).toBe(1300);
+    expect(cumulativeSeries(mixed, "2026-10", "2026-10-05").at(-1)).toEqual({ date: "2026-10-05", cumulative: 1300 });
+    expect(aggregateByMerchant(mixed).find((m) => m.merchant === "A")?.total).toBe(1000);
+  });
+});
+
+describe("notifiedUnpaidTotal", () => {
+  const txs = [
+    { used_at: "2026-08-20T10:00:00+09:00", amount: 5000, source: "gmail" },
+    { used_at: "2026-09-12T10:00:00+09:00", amount: 7000, source: "gmail" },
+    { used_at: "2026-10-03T10:00:00+09:00", amount: 900, source: "gmail" },
+    { used_at: "2026-10-04", amount: 900, source: "csv", status: "confirmed" },
+    { used_at: "2026-10-06T10:00:00+09:00", amount: 100, source: "gmail", status: "cancelled" },
+  ];
+  it("counts every notification when nothing has been paid", () => {
+    expect(notifiedUnpaidTotal(txs, [])).toBe(12900);
+    expect(notifiedUnpaidTotal(txs, [{ paid: 0, debit_date: "2026-10-26", billing_month: "2026-10" }])).toBe(12900);
+  });
+  it("only counts usage after the latest paid debit date (lower bound), never CSV or cancelled rows", () => {
+    expect(notifiedUnpaidTotal(txs, [{ paid: 1, debit_date: "2026-09-26", billing_month: "2026-09" }])).toBe(900);
+    expect(notifiedUnpaidTotal(txs, [{ paid: 1, debit_date: null, billing_month: "2026-08" }])).toBe(7900);
+    expect(notifiedUnpaidTotal(txs, [{ paid: 1, debit_date: "2026-09-26", billing_month: "2026-09" }, { paid: 1, debit_date: "2026-08-27", billing_month: "2026-08" }])).toBe(900);
   });
 });

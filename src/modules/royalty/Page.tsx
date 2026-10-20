@@ -17,9 +17,10 @@ export default function Page() {
   const [provider, setProvider] = useState("");
   const [status, setStatus] = useState<Status | "all">("all");
   const [month, setMonth] = useState("");
+  const [unprocessedOnly, setUnprocessedOnly] = useState(false);
   const [adding, setAdding] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const qs = useMemo(() => { const p = new URLSearchParams(); if (provider) p.set("provider", provider); if (status !== "all") p.set("status", status); if (month) p.set("month", month); const s = p.toString(); return s ? `?${s}` : ""; }, [provider, status, month]);
+  const qs = useMemo(() => { const p = new URLSearchParams(); if (provider) p.set("provider", provider); if (status !== "all") p.set("status", status); if (month) p.set("month", month); if (unprocessedOnly) p.set("processed", "0"); const s = p.toString(); return s ? `?${s}` : ""; }, [provider, status, month, unprocessedOnly]);
   const list = useApi<ListRes>(`/royalty${qs}`);
   const summary = useApi<Summary>("/royalty/summary");
   const reload = () => { list.reload(true); summary.reload(true); };
@@ -50,8 +51,16 @@ export default function Page() {
         <Segmented value={status} onChange={setStatus} options={[{ value: "all", label: "すべて" }, { value: "target", label: `対象 ${counts("target")}` }, { value: "review", label: `要確認 ${counts("review")}` }, { value: "excluded", label: "対象外" }]} />
         <Select aria-label="配信元" value={provider} onChange={(e) => setProvider(e.target.value)} className="w-44" data-testid="royalty-filter-provider"><option value="">配信元すべて</option>{list.data?.providers.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</Select>
         <Select aria-label="対象月" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40" data-testid="royalty-filter-month"><option value="">対象月すべて</option>{summary.data?.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</Select>
+        <label className="flex items-center gap-1.5 text-xs text-label-2" data-testid="royalty-filter-unprocessed"><span>未処理のみ</span><Toggle checked={unprocessedOnly} onChange={setUnprocessedOnly} label="未処理のみ" /></label>
         {summary.data && summary.data.pending_target > 0 && <span className="text-xs text-label-2 ml-auto">未処理の対象 {summary.data.pending_target}件</span>}
       </div>
+
+      {(list.error || summary.error) && (
+        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="royalty-error">
+          <span>読み込みに失敗しました（{list.error ?? summary.error}）</span>
+          <Button size="sm" onClick={reload}>再読み込み</Button>
+        </div>
+      )}
 
       {list.data && list.data.mails.length === 0 ? (
         <Card><EmptyState title="該当する明細通知はありません" hint="Gmailの同期、または「手動で登録」で追加できます。" /></Card>

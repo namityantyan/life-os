@@ -25,7 +25,7 @@ export default function Page() {
   if (debounced) params.set("q", debounced);
   const qs = params.toString();
   const query = `/requests${qs ? `?${qs}` : ""}`;
-  const { data, loading, reload } = useApi<{ items: Req[] }>(query);
+  const { data, loading, error, reload } = useApi<{ items: Req[] }>(query);
   useEffect(() => { if (!loading && data) setFirstLoad(false); }, [loading, data]);
 
   const setStatus = async (item: Req, status: Status) => {
@@ -40,12 +40,13 @@ export default function Page() {
       <PageHeader title="リクエスト" subtitle="Life OSへの要望を記録して、対応状況を管理します。登録だけで自動的に反映されることはありません。"
         actions={<Button variant="primary" onClick={() => setModal({ mode: "new" })} data-testid="request-add">追加</Button>} />
 
+      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Segmented value={filter} onChange={setFilter} options={[{ value: "all" as Filter, label: "すべて" }, ...STATUSES.map((s) => ({ value: s as Filter, label: STATUS_LABELS[s] }))]} />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="タイトル・詳細を検索" aria-label="検索" className="w-56" data-testid="request-search" />
       </div>
 
-      {items.length === 0 ? (
+      {error && !data ? null : items.length === 0 ? (
         <EmptyState title={debounced ? "該当するリクエストはありません" : "リクエストはまだありません"} action={!debounced && filter === "all" ? <Button onClick={() => setModal({ mode: "new" })}>最初のリクエストを追加</Button> : undefined} />
       ) : (
         <Stagger className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3" key={query}>

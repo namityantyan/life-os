@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../../env";
 import { all, one, run, newId } from "../../core/db";
+import { likePattern } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -16,7 +17,7 @@ routes.get("/", async (c) => {
   const q = (c.req.query("q") ?? "").trim();
   const where = ["user_id=?"]; const params: unknown[] = [user.id];
   if (status && (REQUEST_STATUSES as readonly string[]).includes(status)) { where.push("status=?"); params.push(status); }
-  if (q) { where.push("(title LIKE ? OR detail LIKE ?)"); params.push(`%${q}%`, `%${q}%`); }
+  if (q) { const like = likePattern(q); where.push("(title LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\' OR example LIKE ? ESCAPE '\\')"); params.push(like, like, like); }
   const items = await all<RequestRow>(c.env.DB, `SELECT ${COLS} FROM requests WHERE ${where.join(" AND ")} ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, updated_at DESC LIMIT 500`, ...params);
   return c.json({ items });
 });

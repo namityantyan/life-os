@@ -11,6 +11,10 @@ test("ingest: 201 on new run, 200 on resend, 401 on bad token; UI shows the run"
   const again = await page.request.post("/api/integrations/backups", { headers, data: { run_id: runId, content } });
   expect(again.status()).toBe(200);
   expect(((await again.json()) as { duplicate: boolean }).duplicate).toBe(true);
+  // A retry whose body differs (e.g. an added field) is still the same run: idempotent 200, first receipt kept.
+  const changed = await page.request.post("/api/integrations/backups", { headers, data: { run_id: runId, content: { ...content, retry: 1 } } });
+  expect(changed.status()).toBe(200);
+  expect(((await changed.json()) as { duplicate: boolean; content_changed: boolean })).toMatchObject({ duplicate: true, content_changed: true });
   const bad = await page.request.post("/api/integrations/backups", { headers: { ...headers, Authorization: "Bearer nope" }, data: { run_id: `${runId}-x`, content } });
   expect(bad.status()).toBe(401);
 

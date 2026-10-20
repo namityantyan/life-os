@@ -45,3 +45,22 @@ test("requests: create, edit, change status from card, filter, search, delete", 
   await page.getByTestId("request-delete").click();
   await expect(page.getByTestId("request-card").filter({ hasText: `${u}-改` })).toHaveCount(0);
 });
+
+test("requests: a failed load shows an error banner, not an empty list", async ({ authed: page }) => {
+  await page.route("**/api/requests", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal error" }) }));
+  await page.goto("/requests");
+  await expect(page.getByTestId("load-error")).toBeVisible();
+  await expect(page.getByText("リクエストはまだありません")).toHaveCount(0);
+});
+
+test("requests: search treats % and _ literally and also matches the example field", async ({ authed: page }) => {
+  const u = `E2E検索${Date.now()}`;
+  const res = await page.request.post("/api/requests", { data: { title: `${u} 100%`, example: `${u}-例文` }, headers: { Origin: "http://localhost:5173" } });
+  const { item } = await res.json() as { item: { id: string } };
+  await page.goto("/requests");
+  await page.getByTestId("request-search").fill(`${u}-例文`);
+  await expect(page.getByTestId("request-card").filter({ hasText: u })).toHaveCount(1);
+  await page.getByTestId("request-search").fill(`${u} 1%`);
+  await expect(page.getByTestId("request-card").filter({ hasText: u })).toHaveCount(0);
+  await page.request.delete(`/api/requests/${item.id}`, { headers: { Origin: "http://localhost:5173" } });
+});

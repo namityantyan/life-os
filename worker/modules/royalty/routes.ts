@@ -37,7 +37,7 @@ const manualSchema = z.object({
   subject: z.string().trim().min(1).max(500),
   sender: z.string().trim().max(300).optional(),
   body: z.string().max(20000).optional(),
-  received_at: z.string().optional(),
+  received_at: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "日時の形式が不正です").optional(),
   link: z.string().url().nullable().optional(),
 });
 /** Register a mail by hand (testing / mails that never reached Gmail sync). Classified by the same rules as the Gmail sync. */
@@ -47,7 +47,7 @@ routes.post("/manual", async (c) => {
   const cls = classifyRoyaltyMail({ from: b.sender, subject: b.subject, body: b.body });
   const id = newId();
   await run(c.env.DB, "INSERT INTO royalty_mails (id,user_id,provider,subject,sender,received_at,target_month,status,processed,external_id,link) VALUES (?,?,?,?,?,?,?,?,0,NULL,?)",
-    id, user.id, cls.provider, b.subject, b.sender ?? null, b.received_at ?? new Date().toISOString(), extractTargetMonth(b.subject, b.body), cls.status, b.link ?? null);
+    id, user.id, cls.provider, b.subject, b.sender ?? null, b.received_at ? new Date(b.received_at).toISOString() : new Date().toISOString(), extractTargetMonth(b.subject, b.body), cls.status, b.link ?? null);
   const row = await one<MailRow>(c.env.DB, "SELECT * FROM royalty_mails WHERE id=?", id);
   return c.json({ ...decorate(row!), reason: cls.reason }, 201);
 });

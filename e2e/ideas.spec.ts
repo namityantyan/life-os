@@ -53,3 +53,10 @@ test("ideas: create, organize (fallback ok), edit, status, download, archive", a
   expect(res.ok()).toBeTruthy();
   expect(res.headers()["content-type"]).toContain("text/markdown");
 });
+
+test("ideas: a failed load shows an error banner, not an empty list", async ({ authed: page }) => {
+  await page.route("**/api/ideas?*", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal error" }) }));
+  await page.goto("/ideas");
+  await expect(page.getByTestId("load-error")).toBeVisible();
+  await expect(page.getByText("アイデアはまだありません")).toHaveCount(0);
+});
