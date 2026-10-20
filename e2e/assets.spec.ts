@@ -33,13 +33,15 @@ test("assets: plan → allocation shows a value or an undetermined reason", asyn
   const result = page.getByTestId("allocation-result");
   const undet = page.getByTestId("allocation-undetermined");
   await expect(result.or(undet)).toBeVisible();
-  if (await result.isVisible()) {
-    await expect(result).toContainText("守る額");
-    await expect(result).toContainText("運用に回す額");
-  } else {
-    await expect(undet).toContainText("判断を保留");
-    await expect(undet.locator(".text-orange")).not.toBeEmpty();
-  }
+  await expect(async () => {
+    if (await result.count()) {
+      await expect(result).toContainText("守る額");
+      await expect(result).toContainText("運用に回す額");
+    } else {
+      await expect(undet).toContainText("判断を保留");
+      await expect(undet.locator(".text-orange")).not.toBeEmpty();
+    }
+  }).toPass({ timeout: 15_000 });
 });
 
 test("assets: partial account update keeps owner/currency/source (API)", async ({ authed: page }) => {

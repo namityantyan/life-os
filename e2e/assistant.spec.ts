@@ -24,6 +24,8 @@ test("assistant: opens via button and ⌘J, chat persists, briefing chips render
   await expect(log.locator("div.bg-fill").last()).not.toBeEmpty({ timeout: 20000 });
   // persists across reload
   await page.reload();
+  await expect(page.getByTestId("assistant-button")).toBeVisible();
+  await expect(page.getByTestId("page-skeleton")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+j");
   await expect(page.getByTestId("assistant-panel").getByTestId("chat-log")).toContainText(text);
   const hist = await (await page.request.get("/api/assistant/history")).json();
