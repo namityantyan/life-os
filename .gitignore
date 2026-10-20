@@ -1,0 +1,10 @@
+node_modules
+dist
+.wrangler
+.dev.vars
+.env
+*.local
+test-results
+playwright-report
+worker-configuration.d.ts
+.DS_Store

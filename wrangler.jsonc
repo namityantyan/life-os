@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "life-os",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "not_found_handling": "single-page-application", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "life-os-db", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+  ],
+  "kv_namespaces": [
+    { "binding": "KV", "id": "local-kv-placeholder" }
+  ],
+  "triggers": { "crons": ["*/10 * * * *", "0 * * * *", "0 22 * * *"] },
+  "vars": {
+    "APP_NAME": "Life OS",
+    "APP_ORIGIN": "http://localhost:5173",
+    "ALLOWED_EMAILS": "namikyuu831@gmail.com",
+    "DEV_LOGIN": "1"
+  }
+}
