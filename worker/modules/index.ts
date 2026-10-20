@@ -20,9 +20,11 @@ import * as backups from "./backups/routes";
 import * as requests from "./requests/routes";
 import * as discord from "./discord/routes";
 import * as dashboard from "./dashboard/routes";
+import * as integrations from "./integrations/routes";
+import * as data from "./data/routes";
 
 type Mod = { routes?: Hono<AppEnv>; publicRoutes?: Hono<AppEnv> };
-const modules: Record<string, Mod> = { planner, ideas, notes, health, training, assets, cards, fx, finance, royalty, backups, requests, discord, dashboard };
+const modules: Record<string, Mod> = { planner, ideas, notes, health, training, assets, cards, fx, finance, royalty, backups, requests, discord, dashboard, integrations, data };
 
 export function registerModules(app: Hono<AppEnv>) {
   for (const [name, m] of Object.entries(modules)) if (m.routes) app.route(`/${name}`, m.routes);

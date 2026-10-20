@@ -5,6 +5,8 @@ import { NOTIFICATION_KINDS, NOTIFICATION_KIND_LABELS } from "@shared/types";
 import { api, useApi } from "@/lib/api";
 import { useTheme } from "@/app/theme";
 import { Badge, Button, Card, Field, Input, PageHeader, PageSkeleton, Section, Segmented, Toggle, useToast, Skeleton } from "@/components/ui";
+import { IntegrationsCard } from "./IntegrationsCard";
+import { DataCard } from "./DataCard";
 
 const DiscordCard = lazy(() => import("@/modules/discord/SettingsCard").then((m) => ({ default: m.DiscordSettingsCard })).catch(() => ({ default: () => null })));
 
@@ -116,7 +118,12 @@ export default function Page() {
           ))}
         </Card>
         <p className="text-xs text-label-2 px-1">各サービスの鍵はCloudflareのシークレットとして保存します（画面やログには出しません）。設定手順は README を参照。</p>
+        <IntegrationsCard />
         <Suspense fallback={<Skeleton className="h-32" />}><DiscordCard /></Suspense>
+      </Section>
+
+      <Section title="データ" className="scroll-mt-20"><div id="data" />
+        <DataCard />
       </Section>
     </div>
   );
