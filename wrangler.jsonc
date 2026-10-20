@@ -24,13 +24,13 @@
     "production": {
       "ai": { "binding": "AI" },
       "d1_databases": [
-        { "binding": "DB", "database_name": "life-os-db", "database_id": "REPLACE_WITH_D1_ID", "migrations_dir": "migrations" }
+        { "binding": "DB", "database_name": "life-os-db", "database_id": "2db897aa-549b-49d4-9507-e7c6bf88249d", "migrations_dir": "migrations" }
       ],
-      "kv_namespaces": [{ "binding": "KV", "id": "REPLACE_WITH_KV_ID" }],
+      "kv_namespaces": [{ "binding": "KV", "id": "5d5ca8a16d894d65ab844040066c1cd6" }],
       "triggers": { "crons": ["*/10 * * * *", "0 * * * *", "0 22 * * *"] },
       "vars": {
         "APP_NAME": "Life OS",
-        "APP_ORIGIN": "https://life-os.REPLACE.workers.dev",
+        "APP_ORIGIN": "https://life-os-production.namikyuu831.workers.dev",
         "ALLOWED_EMAILS": "namikyuu831@gmail.com"
       }
     }

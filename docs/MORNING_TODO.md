@@ -2,7 +2,13 @@
 
 ローカルでは全モジュールが動き、テストも通る状態です。本番公開と外部連携は以下の操作が必要です。
 
-## 1. Cloudflare（必須・約10分）
+## 1. Cloudflare — 完了（2026-10-21 深夜）
+
+D1 `life-os-db`、KV、SESSION_SECRET、VAPID 鍵、BACKUP_INGEST_TOKEN、FX_CONNECTOR_TOKEN を設定し、本番にデプロイ済み。
+
+本番 URL: https://life-os-production.namikyuu831.workers.dev
+
+以前の手順（参考）:
 1. `npx wrangler login`（ブラウザで認証。トークン切れのため再ログインが必要）
 2. `npx wrangler d1 create life-os-db` → 出力の `database_id` を `wrangler.jsonc` の `env.production.d1_databases[0].database_id` に貼る
 3. `npx wrangler kv namespace create KV` → `id` を `env.production.kv_namespaces[0].id` に貼る
@@ -11,10 +17,10 @@
 6. `npm run deploy` → 表示される `https://life-os.<account>.workers.dev` を `env.production.vars.APP_ORIGIN` に設定して再度 `npm run deploy`
 7. 独自ドメイン `dashboard.nami-tool.com` を使う場合: Cloudflare ダッシュボード → Workers → life-os → Settings → Domains & Routes で追加
 
-## 2. Google ログイン（必須）
+## 2. Google ログイン（必須・未完了。これだけでログインできるようになります）
 1. Google Cloud Console → APIs & Services → Credentials → OAuth client ID（Web）
-2. 承認済みリダイレクト URI: `https://<本番ドメイン>/api/auth/google/callback`（ローカル検証用に `http://localhost:5173/api/auth/google/callback` も）
-3. `npx wrangler secret put GOOGLE_CLIENT_ID --env production` / `GOOGLE_CLIENT_SECRET`
+2. 承認済みリダイレクト URI: `https://life-os-production.namikyuu831.workers.dev/api/auth/google/callback`（ローカル検証用に `http://localhost:5173/api/auth/google/callback` も）
+3. `npx wrangler secret put GOOGLE_CLIENT_ID --env production` / `GOOGLE_CLIENT_SECRET`（値はターミナルで貼り付け）
 4. ローカルで使う場合は `.dev.vars` にも同じ値を書く
 5. 許可するメールは `wrangler.jsonc` の `ALLOWED_EMAILS`（現在 namikyuu831@gmail.com）
 
