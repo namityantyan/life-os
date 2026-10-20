@@ -92,11 +92,11 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
     </button>
   );
 }
-export function Segmented<T extends string>({ value, onChange, options, className }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode }[]; className?: string }) {
+export function Segmented<T extends string>({ value, onChange, options, className, testId }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode }[]; className?: string; testId?: string }) {
   return (
-    <div className={cx("inline-flex p-0.5 rounded-[var(--radius-md)] bg-fill relative", className)} role="tablist">
+    <div className={cx("inline-flex p-0.5 rounded-[var(--radius-md)] bg-fill relative", className)} role="tablist" data-testid={testId}>
       {options.map((o) => (
-        <button key={o.value} role="tab" aria-selected={value === o.value} onClick={() => onChange(o.value)} className={cx("focus-ring relative z-10 px-3 h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
+        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("focus-ring relative z-10 px-3 h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
           {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
           {o.label}
         </button>

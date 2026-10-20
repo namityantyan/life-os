@@ -1,0 +1,98 @@
+# Life OS
+
+予定・健康・トレーニング・お金・FX・通知を一つの画面と Discord から管理する個人向けアプリ。
+仕様は [docs/SPEC.md](docs/SPEC.md)、モジュール実装の約束事は [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
+
+## 構成
+
+```
+life-os/
+├─ worker/            Cloudflare Worker（API・cron・連携）
+│  ├─ index.ts        Hono アプリ。/api/* をルーティング、scheduled() で cron
+│  ├─ core/           OS 部分: auth / db / ai / context / notify / weather / routes
+│  └─ modules/<name>/ 各モジュールの API（routes.ts）と純粋ロジック（logic.ts）
+├─ src/               React フロントエンド（Vite）
+│  ├─ app/            Shell（サイドバー・通知ベル・テーマ）/ 認証 / ルーター
+│  ├─ components/ui/  共通 UI キット（Apple HIG 風、デザイントークン駆動）
+│  ├─ styles/app.css  デザイントークン（文字サイズ・余白・角丸を一括調整）
+│  └─ modules/<name>/ 各モジュールの画面
+├─ shared/            Worker と画面で共有する型・定数
+├─ migrations/        D1（SQLite）マイグレーション
+├─ connector/         Windows MT5 コネクターの骨組み（Python）
+├─ tests/unit/        Vitest（純粋ロジック）
+└─ e2e/               Playwright（実ブラウザ操作テスト）
+```
+
+### OS 部分と共有データ
+
+- **Life Context** (`worker/core/context.ts`): 睡眠・回復・歩数、筋トレ、予定・タスク、カード・現金、FX、メモを 1 つのスナップショットにまとめます。すべての AI 相談（健康・食事・美容・FP・Discord）はこのスナップショットを前提に回答するため、生活全体を踏まえた提案になります。欠測・古い値は null / フラグとして渡し、推測で埋めません。
+- **通知** (`worker/core/notify.ts`): アプリ内ベル・端末プッシュ・Discord の 3 経路。種類別 ON/OFF、永続キュー、再試行、期限、重複防止（FX 約定は長期限・多回数）。
+- **設定** (`settings` テーブル): 地域、通知、予算、FX 設定などを JSON で保持。
+
+## 技術選定と理由
+
+| 領域 | 選定 | 理由 |
+| --- | --- | --- |
+| 実行基盤 | **Cloudflare Workers**（静的アセット同梱） | 指示どおり Cloudflare 基本。フロント配信と API を 1 つの Worker で配信でき、常駐サーバーも PM2 も不要。cron trigger で Oura 同期・通知配信を定期実行 |
+| API | **Hono** | Workers 向けに最軽量・型安全。ミドルウェアでセッション認証と同一サイト確認を一括適用 |
+| DB | **D1 (SQLite)** | 旧版が SQLite だったためスキーマ移行が素直。個人利用の規模に十分、マイグレーション管理が wrangler で完結 |
+| セッション・キャッシュ | **KV** | セッション、OAuth state、天気キャッシュ、FX 実行リースなど TTL 付きデータに最適 |
+| AI | **Workers AI**（Llama 3.3 70B） | 指示どおり。外部 API キー不要で Cloudflare 内で完結。ローカル開発や未接続時は決定的フォールバックで UI とテストが止まらない |
+| 認証 | **Google OAuth 2.0 のみ**（自前実装） | 指示どおり Google 認証のみ。許可メール一覧（`ALLOWED_EMAILS`）で本人限定。ライブラリ不要の最小実装で依存を減らす。開発時のみ `DEV_LOGIN=1` で開発用ログイン |
+| フロント | **React 19 + Vite + TypeScript** | `@cloudflare/vite-plugin` で Worker とフロントを同じ dev サーバーで動かせる。モジュール単位の遅延読み込みで初期表示を軽く |
+| ルーティング | react-router v7 | 14 モジュールを `/<module>/*` に分割、各モジュール内でサブルート可 |
+| スタイル | **Tailwind CSS v4 + CSS 変数トークン** | `--ui-font-scale` / `--ui-space-scale` / `--ui-radius-scale` から全サイズを派生。設定画面のスライダーで文字サイズ・余白・角丸を一括調整。Apple HIG のセマンティックカラーを light/dark で定義 |
+| アニメーション | **motion**（Framer Motion の後継） | レイアウトアニメーション（サイドバー、セグメント）、入場スタッガー、モーダル、トーストを宣言的に。`prefers-reduced-motion` と設定で抑制可 |
+| チャート | recharts（推移）・lightweight-charts（FX ローソク足） | 資産・カード推移は recharts で十分。FX はローソク足・マーカー・欠損詰めが必要なので TradingView 製の lightweight-charts |
+| 通知 | **Web Push（VAPID、`@block65/webcrypto-web-push`）** + Discord REST | Workers の WebCrypto で動く Push ライブラリ。Service Worker は通知専用で認証済みデータをキャッシュしない |
+| Discord | **Interactions（HTTP）+ スラッシュコマンド** | Workers は Gateway の常時接続を保持できないため HTTP 型 BOT。`/chat` が自然文入口。通知は Bot token で DM 送信 |
+| バリデーション | zod v4 | API 入力を全て検証 |
+| テスト | **Vitest**（純粋ロジック）+ **Playwright**（実ブラウザ） | 1RM、気圧判定、カード目安、FX 計算などは単体で固定。画面はデスクトップ/モバイル両方で実際に操作 |
+| 天気 | Open-Meteo | 旧版と同じ。無料・鍵不要・海面気圧の時系列が取れる |
+
+### 旧版（Python/FastAPI + SQLite + PM2）からの変更点
+
+- 常駐プロセスを廃止し、Workers の cron とキューで代替（Oura 10 分、freee 1 時間、朝 07:00 JST、通知配信）。
+- Discord の Gateway BOT はメンション反応ができないため、スラッシュコマンド `/chat` に置き換え（詳細 [docs/discord.md](docs/discord.md)）。
+- FX の注文実行は引き続き Windows MT5 コネクター側。サーバーは許可・設定・履歴・通知・チャートを担当（[connector/README.md](connector/README.md)）。
+
+## ローカル開発
+
+```bash
+npm install
+cp .dev.vars.example .dev.vars   # SESSION_SECRET を適当な長い文字列に
+npm run db:migrate:local
+npm run dev                      # http://localhost:5173（開発用ログインが使える）
+```
+
+テスト:
+
+```bash
+npm test             # Vitest
+npm run test:e2e     # Playwright（dev サーバーを自動起動）
+```
+
+## デプロイ（Cloudflare）
+
+```bash
+npx wrangler login
+npx wrangler d1 create life-os-db          # → database_id を wrangler.jsonc の env.production に
+npx wrangler kv namespace create KV        # → id を wrangler.jsonc の env.production に
+npm run db:migrate:remote
+npx wrangler secret put SESSION_SECRET --env production
+npx wrangler secret put GOOGLE_CLIENT_ID --env production
+npx wrangler secret put GOOGLE_CLIENT_SECRET --env production
+# 任意: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT, DISCORD_*, OURA_ACCESS_TOKEN, FREEE_*, BACKUP_INGEST_TOKEN, FX_CONNECTOR_TOKEN
+npm run deploy
+```
+
+Google OAuth のリダイレクト URI は `https://<your-domain>/api/auth/google/callback`。`APP_ORIGIN`（wrangler.jsonc の env.production.vars）を本番 URL に合わせてください。
+
+VAPID 鍵の生成: `npx web-push generate-vapid-keys`（または `node -e` で WebCrypto から生成）。
+
+## セキュリティ方針
+
+- 認証情報はすべて Cloudflare Secrets。リポジトリ・画面・通知・ログに載せない。
+- 更新系 API は `Origin` / `Sec-Fetch-Site` で同一サイトを確認。
+- freee トークンは AES-GCM で暗号化して保存。
+- Service Worker は通知のみ。認証済みデータをキャッシュしない。
