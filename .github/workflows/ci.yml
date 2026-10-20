@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npx vitest run
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare local env
+        run: |
+          cp .dev.vars.example .dev.vars
+          sed -i 's/SESSION_SECRET=.*/SESSION_SECRET=ci-secret-0123456789abcdef0123456789/' .dev.vars
+          echo "FX_CONNECTOR_TOKEN=dev-fx-token" >> .dev.vars
+          echo "BACKUP_INGEST_TOKEN=dev-backup-token" >> .dev.vars
+          npm run db:migrate:local
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-results, path: test-results, retention-days: 7 }
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Deploy (skipped until CLOUDFLARE_API_TOKEN secret is set)
+        if: ${{ env.CF_TOKEN != '' }}
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy
