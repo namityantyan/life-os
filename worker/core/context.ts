@@ -109,3 +109,24 @@ export async function adviseWithContext(env: Env, userId: string, role: string, 
   const ctx = await buildLifeContext(env, userId, { weather: true });
   return chat(env, [{ role: "system", content: contextSystemPrompt(ctx, role) }, ...history]);
 }
+
+/**
+ * One-line daily hint. Rule-based `suggestAction` is always computed; when Workers AI is
+ * available the hint is refined with the full Life Context (cached per user per hour in KV).
+ */
+export async function dailyHint(env: Env, userId: string, ctx: LifeContext): Promise<{ text: string; source: "ai" | "rules" }> {
+  const base = suggestAction(ctx);
+  if (!env.AI) return { text: base, source: "rules" };
+  const key = `hint:${userId}:${ctx.now.slice(0, 13)}`;
+  const cached = await env.KV.get(key);
+  if (cached) return { text: cached, source: "ai" };
+  const r = await chat(env, [
+    { role: "system", content: contextSystemPrompt(ctx, "ダッシュボードの一言アドバイス。60文字以内の日本語1文。見出し・絵文字・前置きなし。欠測は推測しない。") },
+    { role: "user", content: `ルールベースの案: 「${base}」。必要なら生活データ全体を踏まえて言い換え、そのまま1文だけ返してください。` },
+  ], { maxTokens: 120 });
+  if (r.provider !== "workers-ai") return { text: base, source: "rules" };
+  const text = r.text.replace(/^["「]|["」]$/g, "").split("\n")[0].trim().slice(0, 90);
+  if (!text) return { text: base, source: "rules" };
+  await env.KV.put(key, text, { expirationTtl: 3600 });
+  return { text, source: "ai" };
+}

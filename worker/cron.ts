@@ -1,7 +1,7 @@
 import type { Env } from "./env";
 import { all, one, run, getSetting, jstDate, jstHour } from "./core/db";
 import { notify, processQueue } from "./core/notify";
-import { buildLifeContext, suggestAction } from "./core/context";
+import { buildLifeContext, suggestAction, dailyHint } from "./core/context";
 
 /** Cron entry. Schedules in wrangler.jsonc: every 10 min, hourly, daily 22:00 UTC (07:00 JST). */
 export async function runScheduled(env: Env, cron: string) {
@@ -43,7 +43,7 @@ async function maybeMorning(env: Env, userId: string) {
   await run(env.DB, "INSERT INTO job_runs (job,key) VALUES ('daily',?)", key);
   const include = await getSetting<{ oura: boolean; events: boolean; tasks: boolean; meals: boolean }>(env, userId, "morning_contents", { oura: true, events: true, tasks: true, meals: false });
   const ctx = await buildLifeContext(env, userId, { weather: true });
-  const lines: string[] = [suggestAction(ctx)];
+  const lines: string[] = [(await dailyHint(env, userId, ctx)).text];
   if (include.oura && ctx.health.oura_is_today && ctx.health.oura) lines.push(`睡眠 ${ctx.health.oura.sleep_score ?? "—"} / 回復 ${ctx.health.oura.readiness_score ?? "—"}`);
   if (include.events && ctx.planner.events_today.length) lines.push(`予定 ${ctx.planner.events_today.map((e) => e.title).join("、")}`);
   if (include.tasks) lines.push(`未完了タスク ${ctx.planner.tasks_open}件`);
