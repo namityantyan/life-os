@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from "recharts";
-import { PageHeader, PageSkeleton, Card, Section, Stat, Badge, Button, Input, Select, Field, Modal, EmptyState, Stagger, Item, ChatPanel, useToast, type ChatMsg } from "@/components/ui";
+import { PageHeader, PageSkeleton, Card, Section, Stat, Badge, Button, Input, Select, Field, Textarea, Modal, EmptyState, ErrorBanner, Stagger, Item, ChatPanel, ChartTip, useChartColors, useToast, cx, type ChatMsg } from "@/components/ui";
 import { api, useApi, fmtYen, fmtDateTime, todayJst } from "@/lib/api";
 import type { CardOverview, CardStatement, CardSettings } from "@shared/cards";
 
@@ -16,15 +16,17 @@ export default function Page() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const cc = useChartColors();
   const reload = () => { ov.reload(true); statements.reload(true); insights.reload(true); };
   const gmailSync = async () => { setSyncing(true); try { const r = await api.post<{ connected: boolean; found: number; imported: number; errors: string[] }>("/cards/gmail/sync"); toast(r.connected ? `Gmailを確認しました（${r.found}件中 新規${r.imported}件）` : "Gmailは未接続です（設定からGoogle連携でgmail.readonlyを許可してください）", r.connected ? "success" : "error"); reload(); } catch (e: any) { toast(e.message, "error"); } finally { setSyncing(false); } };
   if (ov.loading && !ov.data) return <PageSkeleton />;
-  if (!ov.data) return <div><PageHeader title="カード利用" /><EmptyState title="カード利用を取得できません" hint={ov.error ?? undefined} action={<Button onClick={() => ov.reload()}>再読み込み</Button>} /></div>;
+  if (!ov.data) return <div><PageHeader title="カード利用" /><ErrorBanner message={ov.error} onRetry={() => ov.reload()} testId="cards-error" /><EmptyState title="カード利用を取得できません" /></div>;
   const o = ov.data;
   const g = o.guide;
   return (
     <div>
       <PageHeader title="カード利用" subtitle="三井住友カードの利用通知と確定明細。速報であり確定請求ではありません。" actions={<><Button onClick={gmailSync} loading={syncing} data-testid="gmail-sync">Gmailを確認</Button><Button onClick={() => setSettingsOpen(true)} data-testid="settings-open">設定</Button><Button variant="primary" onClick={() => setTxOpen(true)} data-testid="tx-add">利用を追加</Button></>} />
+      {(ov.error || statements.error || insights.error) && <ErrorBanner message={ov.error ?? statements.error ?? insights.error} onRetry={reload} testId="cards-error" />}
       <Card className="mb-6">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-5" data-testid="card-stats">
           <Stat label="今月の利用累計" value={fmtYen(o.month_total)} hint={`${o.month} 取得済み ${o.count}件`} />
@@ -33,7 +35,7 @@ export default function Page() {
           <Stat label="追加利用の目安" value={g.undetermined ? "保留" : fmtYen(g.amount)} hint={g.undetermined ? g.reason : `現金から見た上限 ${fmtYen(g.cash_cap)}・残高 ${o.cash.as_of ?? "—"} 時点`} tone={g.undetermined ? "orange" : "accent"} />
         </div>
       </Card>
-      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-[1.4fr_1fr]">
         <div className="space-y-6">
           <Section title="今月の利用累計">
             <Card>
@@ -41,12 +43,12 @@ export default function Page() {
               <div className="h-56" data-testid="card-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={o.series} margin={{ left: 8, right: 8, top: 8, bottom: 0 }}>
-                    <CartesianGrid vertical={false} stroke="var(--separator)" />
-                    <XAxis dataKey="date" tickFormatter={fmtD} tick={{ fill: "var(--label-2)", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={24} />
-                    <YAxis tickFormatter={fmtMan} tick={{ fill: "var(--label-2)", fontSize: 11 }} axisLine={false} tickLine={false} width={40} />
-                    {o.budget != null && <ReferenceLine y={o.budget} stroke="var(--label-3)" strokeDasharray="4 4" label={{ value: "予算", position: "insideTopRight", fill: "var(--label-2)", fontSize: 11 }} />}
-                    <Tooltip cursor={{ stroke: "var(--label-3)" }} content={({ active, payload }) => active && payload?.[0] ? <div className="glass rounded-[var(--radius-md)] px-3 py-2 text-sm shadow-[var(--shadow-pop)]"><div className="text-label-2 text-xs">{(payload[0].payload as any).date}</div><div className="tabular font-medium">{fmtYen(payload[0].value as number)}</div></div> : null} />
-                    <Line type="stepAfter" dataKey="cumulative" stroke="var(--accent)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--bg-elevated)" }} isAnimationActive={false} />
+                    <CartesianGrid vertical={false} stroke={cc.separator} />
+                    <XAxis dataKey="date" tickFormatter={fmtD} tick={{ fill: cc.label2, fontSize: cc.tickFont }} axisLine={false} tickLine={false} minTickGap={24} />
+                    <YAxis tickFormatter={fmtMan} tick={{ fill: cc.label2, fontSize: cc.tickFont }} axisLine={false} tickLine={false} width={40} />
+                    {o.budget != null && <ReferenceLine y={o.budget} stroke={cc.label3} strokeDasharray="4 4" label={{ value: "予算", position: "insideTopRight", fill: cc.label2, fontSize: cc.tickFont }} />}
+                    <Tooltip cursor={{ stroke: cc.label3 }} content={({ active, payload }) => active && payload?.[0] ? <ChartTip label={fmtD((payload[0].payload as any).date)} value={fmtYen(payload[0].value as number)} /> : null} />
+                    <Line type="stepAfter" dataKey="cumulative" stroke={cc.accent} strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: cc.elevated }} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -54,12 +56,12 @@ export default function Page() {
           </Section>
           <Section title="利用タイムライン">
             {o.timeline.length === 0 ? <Card><EmptyState title="今月の利用はまだありません" hint="Gmailを確認するか、手動で追加できます" /></Card> : (
-              <Stagger className="card divide-y divide-separator" >
+              <Stagger className="card divide-y divide-separator">
                 {o.timeline.map((t) => (
-                  <Item key={t.id} className="flex items-center gap-3 px-5 py-3" >
+                  <Item key={t.id} className="flex items-center gap-3 px-5 py-3">
                     <div className="min-w-0 flex-1"><div className="font-medium truncate" data-testid="tx-merchant">{t.merchant ?? "（利用先なし）"}{t.status === "cancelled" && <Badge tone="red" className="ml-2">取消</Badge>}{t.status === "confirmed" && <Badge tone="green" className="ml-2">確定</Badge>}</div><div className="text-xs text-label-2">{fmtDateTime(t.used_at)}・{t.source === "gmail" ? "メール" : t.source === "csv" ? "明細" : "手入力"}</div></div>
-                    <div className="text-right"><div className={"tabular font-medium" + (t.status === "cancelled" ? " line-through text-label-3" : "")}>{fmtYen(t.amount)}</div><div className="text-xs text-label-2 tabular">累計 {fmtYen(t.running)}</div></div>
-                    <Button size="sm" variant="ghost" onClick={async () => { if (!confirm("削除しますか？")) return; await api.del(`/cards/transactions/${t.id}`); reload(); }}>削除</Button>
+                    <div className="text-right"><div className={cx("tabular font-medium", t.status === "cancelled" && "line-through text-label-3")}>{fmtYen(t.amount)}</div><div className="text-xs text-label-2 tabular">累計 {fmtYen(t.running)}</div></div>
+                    <Button size="sm" variant="danger" aria-label={`${t.merchant ?? "利用"}を削除`} onClick={async () => { if (!confirm(`「${t.merchant ?? "利用先なし"} ${fmtYen(t.amount)}」を削除しますか？`)) return; await api.del(`/cards/transactions/${t.id}`); reload(); }}>削除</Button>
                   </Item>
                 ))}
               </Stagger>
@@ -73,7 +75,7 @@ export default function Page() {
               {!insights.data ? null : insights.data.candidates.length === 0 && insights.data.merchants.length === 0 ? <div className="text-sm text-label-3">今月のデータがまだ少ないため候補はありません。</div> : (
                 <div className="space-y-3 text-sm">
                   {insights.data.candidates.map((c, i) => <div key={i}><div className="font-medium">{c.label}</div><div className="text-xs text-label-2">{c.detail}</div></div>)}
-                  {insights.data.merchants.length > 0 && <div><div className="text-xs text-label-2 mb-1">利用先の上位</div>{insights.data.merchants.slice(0, 5).map((m) => <div key={m.merchant} className="flex justify-between"><span className="truncate">{m.merchant} <span className="text-label-3">×{m.count}</span></span><span className="tabular">{fmtYen(m.total)}</span></div>)}</div>}
+                  {insights.data.merchants.length > 0 && <div><div className="text-xs text-label-2 mb-1">利用先の上位</div>{insights.data.merchants.slice(0, 5).map((m) => <div key={m.merchant} className="flex justify-between gap-3"><span className="truncate min-w-0">{m.merchant} <span className="text-label-3 tabular">×{m.count}</span></span><span className="tabular text-right shrink-0">{fmtYen(m.total)}</span></div>)}</div>}
                   {insights.data.pace_month_end != null && <div className="text-xs text-label-2">このペースの月末見込み {fmtYen(insights.data.pace_month_end)}・先月 {fmtYen(insights.data.prev_month.total)}</div>}
                 </div>
               )}
@@ -158,11 +160,11 @@ function StatementsSection({ statements, onChanged }: { statements: CardStatemen
                 {s.line_count != null && <span className="text-xs text-label-2">{s.line_count}行</span>}
               </div>
               <div className="flex items-center gap-2 flex-wrap text-xs text-label-2">
-                <span>引落日</span><input type="date" className="bg-transparent text-label" value={s.debit_date ?? ""} onChange={(e) => patch(s, { debit_date: e.target.value || null })} aria-label="引落日" />
+                <span>引落日</span><Input type="date" className="h-9 w-40 text-sm" value={s.debit_date ?? ""} onChange={(e) => patch(s, { debit_date: e.target.value || null })} aria-label={`${s.billing_month}分の引落日`} />
                 <span className="flex-1" />
                 {!s.confirmed && <Button size="sm" onClick={() => patch(s, { confirmed: true })} data-testid="statement-confirm">確認</Button>}
                 {s.confirmed && !s.paid && <Button size="sm" onClick={() => patch(s, { paid: true })}>引落済みにする</Button>}
-                <Button size="sm" variant="ghost" onClick={async () => { if (!confirm("削除しますか？CSVの明細行も削除されます。")) return; await api.del(`/cards/statements/${s.id}`); onChanged(); }}>削除</Button>
+                <Button size="sm" variant="danger" onClick={async () => { if (!confirm(`${s.billing_month}分の明細を削除しますか？CSVの明細行も削除されます。`)) return; await api.del(`/cards/statements/${s.id}`); onChanged(); }}>削除</Button>
               </div>
             </div>
           ))}
@@ -170,13 +172,13 @@ function StatementsSection({ statements, onChanged }: { statements: CardStatemen
       )}
       <Modal open={open} onClose={() => setOpen(false)} title="確定明細を登録" wide={mode === "csv"} footer={<><Button onClick={() => setOpen(false)}>キャンセル</Button>{mode === "csv" && <Button onClick={check} disabled={!f.csv.trim()}>検証</Button>}<Button variant="primary" onClick={save} disabled={mode === "csv" ? !f.csv.trim() : !f.amount} loading={saving} data-testid="statement-submit">登録</Button></>}>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="登録方法" className="col-span-2"><Select value={mode} onChange={(e) => setMode(e.target.value as any)}><option value="manual">請求額を入力</option><option value="csv">CSV明細を取り込む</option></Select></Field>
+          <Field label="登録方法" className="col-span-2"><Select value={mode} onChange={(e) => setMode(e.target.value as "manual" | "csv")}><option value="manual">請求額を入力</option><option value="csv">CSV明細を取り込む</option></Select></Field>
           <Field label="請求月"><Input type="month" value={f.billing_month} onChange={(e) => setF({ ...f, billing_month: e.target.value })} data-testid="statement-month" /></Field>
           <Field label="引落日（実際の日付）"><Input type="date" value={f.debit_date} onChange={(e) => setF({ ...f, debit_date: e.target.value })} /></Field>
           {mode === "manual" ? <Field label="請求額（円）" className="col-span-2"><Input inputMode="numeric" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} data-testid="statement-amount" /></Field> : (
             <div className="col-span-2 space-y-2">
-              <Field label="CSV" hint="列: 利用日,利用先,金額 … と 合計行。合計と明細の和が一致しない場合は登録しません。"><textarea className="focus-ring w-full h-40 p-3 rounded-[var(--radius-md)] bg-fill font-mono text-sm" value={f.csv} onChange={(e) => { setF({ ...f, csv: e.target.value }); setPreview(null); }} /></Field>
-              {preview && <div className={"text-sm " + (preview.valid ? "text-green" : "text-red")}>{preview.valid ? `検証OK: ${preview.lines.length}行・合計 ${fmtYen(preview.total)}` : preview.errors.join(" / ")}</div>}
+              <Field label="CSV" hint="列: 利用日,利用先,金額 … と 合計行。合計と明細の和が一致しない場合は登録しません。"><Textarea className="h-40 font-mono text-sm" value={f.csv} onChange={(e) => { setF({ ...f, csv: e.target.value }); setPreview(null); }} /></Field>
+              {preview && <div className={cx("text-sm", preview.valid ? "text-green" : "text-red")} role="status">{preview.valid ? `検証済み: ${preview.lines.length}行・合計 ${fmtYen(preview.total)}` : `検証エラー: ${preview.errors.join(" / ")}`}</div>}
             </div>
           )}
         </div>

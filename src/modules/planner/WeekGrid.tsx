@@ -95,9 +95,9 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
           const isToday = d === today;
           return (
             <div key={d} className={cx("py-2 text-center border-l border-separator", toneCls(dayTone(d)))} data-testid={`day-header-${d}`}>
-              <div className="text-[0.7rem] font-medium opacity-80">{weekdayJa(d)}</div>
+              <div className="text-xs font-medium opacity-80">{weekdayJa(d)}</div>
               <div className={cx("mx-auto mt-0.5 grid size-7 place-items-center rounded-full text-sm font-semibold tabular", isToday && "bg-accent text-white")}>{fmtMD(d).split("/")[1]}</div>
-              <div className="text-[0.65rem] opacity-60 tabular">{fmtMD(d).split("/")[0]}月</div>
+              <div className="text-xs opacity-60 tabular">{fmtMD(d).split("/")[0]}月</div>
             </div>
           );
         })}
@@ -105,7 +105,7 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
 
       {/* all-day row (tasks) */}
       <div className={cx(cols, "border-b border-separator bg-subtle/60")}>
-        <div className="text-[0.65rem] text-label-3 text-right pr-1.5 pt-1.5">終日</div>
+        <div className="text-xs text-label-3 text-right pr-1.5 pt-1.5">終日</div>
         {days.map((d) => (
           <div key={d} data-testid={`allday-cell-${d}`}
             onDragOver={(e) => allow(e, `a:${d}`)} onDragLeave={() => setOverCell(null)} onDrop={(e) => dropAllDay(e, d)}
@@ -130,7 +130,7 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
       <div ref={scrollRef} className="max-h-[58vh] overflow-y-auto overscroll-contain">
         <div className={cx(cols, "relative")} style={{ height: DAY_PX }}>
           <div className="relative">
-            {HOURS.map((h) => <div key={h} className="absolute right-1.5 -translate-y-1/2 text-[0.65rem] text-label-3 tabular" style={{ top: h * HOUR_PX }}>{h === 0 ? "" : `${h}:00`}</div>)}
+            {HOURS.map((h) => <div key={h} className="absolute right-1.5 -translate-y-1/2 text-xs text-label-3 tabular" style={{ top: h * HOUR_PX }}>{h === 0 ? "" : `${h}:00`}</div>)}
           </div>
           {days.map((d) => {
             const isToday = d === today;
@@ -149,7 +149,7 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
                       className="absolute left-2 right-0.5 z-[5] overflow-hidden rounded-[var(--radius-sm)] border border-dashed border-label-3 bg-elevated/70 px-1.5 py-0.5 text-xs text-label-2 cursor-default"
                       style={{ top: s / 60 * HOUR_PX, height: dur / 60 * HOUR_PX - 2 }}>
                       <div className="truncate font-medium">{g.title}</div>
-                      <div className="text-[0.65rem] opacity-70 tabular">{fmtTime(g.start_at)}–{fmtTime(g.end_at)}</div>
+                      <div className="text-xs opacity-70 tabular">{fmtTime(g.start_at)}–{fmtTime(g.end_at)}</div>
                     </div>
                   );
                 })}
@@ -178,8 +178,8 @@ export function WeekGrid({ days, items, google, onDrop, onResize, onOpen, onCell
                       className={cx("pressable focus-ring absolute left-0.5 right-2 z-10 overflow-hidden rounded-[var(--radius-sm)] border-l-2 border-accent bg-accent-soft px-1.5 py-0.5 text-xs text-accent cursor-grab active:cursor-grabbing", resize?.id === it.id && "ring-2 ring-accent/40")}
                       style={{ top: s / 60 * HOUR_PX, height: h / 60 * HOUR_PX - 2 }}>
                       <div className="truncate font-medium">{it.title}</div>
-                      <div className="text-[0.65rem] opacity-80 tabular">{fmtTime(it.start_at!)}–{fmtTime(isoAt(d, e))}</div>
-                      <div data-testid={`resize-${it.id}`} aria-label="長さを変更" onPointerDown={(ev) => startResize(ev, it, d, s, s + durationMin(it.start_at!, it.end_at ?? it.start_at!))} onDragStart={(ev) => { ev.preventDefault(); ev.stopPropagation(); }} draggable={false}
+                      <div className="text-xs opacity-80 tabular">{fmtTime(it.start_at!)}–{fmtTime(isoAt(d, e))}</div>
+                      <div data-testid={`resize-${it.id}`} role="separator" aria-orientation="horizontal" aria-label="終了時刻を変更" onPointerDown={(ev) => startResize(ev, it, d, s, s + durationMin(it.start_at!, it.end_at ?? it.start_at!))} onDragStart={(ev) => { ev.preventDefault(); ev.stopPropagation(); }} draggable={false}
                         className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-accent/20" />
                     </div>
                   );

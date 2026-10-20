@@ -31,6 +31,6 @@ routes.get("/", async (c) => {
     all(c.env.DB, "SELECT id,title,start_at,end_at,type FROM planner_items WHERE user_id=? AND type='event' AND archived_at IS NULL AND substr(start_at,1,10)>=? AND substr(start_at,1,10)<=? ORDER BY start_at LIMIT 30", user.id, today, weekEnd),
     all(c.env.DB, "SELECT pair,bid,ask,quoted_at FROM fx_quotes ORDER BY pair"),
   ]);
-  const hint = await dailyHint(c.env, user.id, ctx);
-  return c.json({ context: ctx, suggestion: hint.text, suggestionSource: hint.source, weather, weatherError, weatherConfigured: Boolean(loc), tasks, events, fxPairs: pairs, today });
+  const [hint, layout] = await Promise.all([dailyHint(c.env, user.id, ctx), getSetting<unknown>(c.env, user.id, "dashboard_layout", null)]);
+  return c.json({ context: ctx, suggestion: hint.text, suggestionSource: hint.source, weather, weatherError, weatherConfigured: Boolean(loc), tasks, events, fxPairs: pairs, today, layout });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
-import { PageHeader, Card, Section, Stat, Badge, Button, Input, Select, Field, Textarea, Modal, PageSkeleton, EmptyState, Stagger, Item, useToast, cx } from "@/components/ui";
-import { api, useApi, fmtYen, todayJst } from "@/lib/api";
+import { PageHeader, Card, Section, Stat, Badge, Button, Input, Select, Field, Textarea, Modal, PageSkeleton, EmptyState, ErrorBanner, Stagger, Item, Table, Th, Td, trCls, useToast, cx } from "@/components/ui";
+import { api, useApi, fmtYen, fmtDate, todayJst } from "@/lib/api";
 
 type Reconcile = { status: "match" | "mismatch" | "unverified"; computed: number; pdf_total: number | null; diff: number | null };
 type Invoice = { id: string; client: string; issued_on: string; amount: number; tax: number; withholding: number; pdf_total: number | null; status: "issued" | "paid"; notes: string | null; reconcile: Reconcile };
@@ -46,12 +46,7 @@ export default function Page() {
         </>
       } />
 
-      {error && (
-        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="finance-error">
-          <span>読み込みに失敗しました（{error}）</span>
-          <Button size="sm" onClick={() => { summary.reload(); list.reload(); }}>再読み込み</Button>
-        </div>
-      )}
+      {error && <ErrorBanner message={error} onRetry={() => { summary.reload(); list.reload(); }} testId="finance-error" />}
 
       {s && (
         <Card className="mb-6">
@@ -65,28 +60,28 @@ export default function Page() {
         </Card>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
+      <div className="grid gap-6 grid-cols-1 xl:grid-cols-[1.1fr_1fr]">
         <Section title={`${year}年 月別`}>
-          <Card padded={false} className="overflow-x-auto">
-            <table className="w-full text-sm tabular" data-testid="finance-monthly">
-              <thead><tr className="text-label-2 text-xs"><th className="text-left font-medium px-5 py-3">月</th><th className="text-right font-medium px-3 py-3">件数</th><th className="text-right font-medium px-3 py-3">報酬</th><th className="text-right font-medium px-3 py-3">消費税</th><th className="text-right font-medium px-3 py-3">源泉徴収</th><th className="text-right font-medium px-5 py-3">請求額</th></tr></thead>
+          <Card padded={false}>
+            <Table testId="finance-monthly">
+              <thead><tr><Th className="pl-5">月</Th><Th align="right">件数</Th><Th align="right">報酬</Th><Th align="right">消費税</Th><Th align="right">源泉徴収</Th><Th align="right" className="pr-5">請求額</Th></tr></thead>
               <tbody>
                 {s?.months.map((m) => (
-                  <tr key={m.month} data-testid={`month-row-${m.month}`} className={cx("border-t border-separator", m.count === 0 && "text-label-3")}>
-                    <td className="px-5 py-2.5 text-left">{monthLabel(m.month)}{m.mismatches > 0 && <Badge tone="orange" className="ml-2">不一致 {m.mismatches}</Badge>}</td>
-                    <td className="px-3 py-2.5 text-right">{m.count || "—"}</td>
-                    <td className="px-3 py-2.5 text-right">{m.count ? fmtYen(m.amount) : "—"}</td>
-                    <td className="px-3 py-2.5 text-right">{m.count ? fmtYen(m.tax) : "—"}</td>
-                    <td className="px-3 py-2.5 text-right" data-testid={`month-withholding-${m.month}`}>{m.count ? fmtYen(m.withholding) : "—"}</td>
-                    <td className="px-5 py-2.5 text-right">{m.count ? fmtYen(m.total) : "—"}</td>
+                  <tr key={m.month} data-testid={`month-row-${m.month}`} className={cx(trCls, m.count === 0 && "text-label-3")}>
+                    <Td className="pl-5">{monthLabel(m.month)}{m.mismatches > 0 && <Badge tone="orange" className="ml-2">不一致 {m.mismatches}</Badge>}</Td>
+                    <Td align="right">{m.count || "—"}</Td>
+                    <Td align="right">{m.count ? fmtYen(m.amount) : "—"}</Td>
+                    <Td align="right">{m.count ? fmtYen(m.tax) : "—"}</Td>
+                    <Td align="right" data-testid={`month-withholding-${m.month}`}>{m.count ? fmtYen(m.withholding) : "—"}</Td>
+                    <Td align="right" className="pr-5">{m.count ? fmtYen(m.total) : "—"}</Td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </Card>
         </Section>
 
-        <Section title="請求書" action={<span className="text-xs text-label-3">{list.data?.invoices.length ?? 0}件</span>}>
+        <Section title="請求書" action={<span className="text-xs text-label-3 tabular">{list.data?.invoices.length ?? 0}件</span>}>
           {list.data && list.data.invoices.length === 0 ? (
             <Card><EmptyState title="この年の請求書はまだありません" hint="「請求書を追加」から記録すると、消費税と源泉徴収を自動計算します。" /></Card>
           ) : (
@@ -98,10 +93,10 @@ export default function Page() {
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="font-medium truncate">{inv.client}</span>
                         {inv.status === "paid" && <Badge tone="green">入金済</Badge>}
-                        {inv.reconcile.status === "mismatch" && <Badge tone="orange" className="invoice-mismatch">PDFと不一致 {inv.reconcile.diff != null && (inv.reconcile.diff > 0 ? `+${inv.reconcile.diff}` : inv.reconcile.diff)}円</Badge>}
+                        {inv.reconcile.status === "mismatch" && <Badge tone="orange" className="invoice-mismatch tabular">PDFと不一致 {inv.reconcile.diff != null && fmtYen(inv.reconcile.diff, { sign: true })}</Badge>}
                         {inv.reconcile.status === "match" && <Badge tone="green">PDF一致</Badge>}
                       </div>
-                      <div className="text-xs text-label-2 mt-0.5">{inv.issued_on}　源泉 <span className="tabular">{fmtYen(inv.withholding)}</span></div>
+                      <div className="text-xs text-label-2 mt-0.5 tabular">{fmtDate(inv.issued_on)} 発行　源泉 {fmtYen(inv.withholding)}</div>
                     </div>
                     <div className="text-right shrink-0"><div className="font-semibold tabular">{fmtYen(inv.reconcile.computed)}</div><div className="text-xs text-label-3 tabular">報酬 {fmtYen(inv.amount)}</div></div>
                   </Card></div>

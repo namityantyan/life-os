@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { api, useApi, fmtDateTime } from "@/lib/api";
-import { Badge, Button, Card, EmptyState, Input, Item, PageHeader, PageSkeleton, Segmented, Stagger, Textarea, Toggle, useToast, cx } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorBanner, Input, Item, PageHeader, PageSkeleton, Segmented, Stagger, Textarea, Toggle, useToast, cx } from "@/components/ui";
 
 type Category = "policy" | "decision" | "promise" | "preference" | "other";
 type Note = { id: string; category: Category; content: string; archived_at: string | null; created_at: string; updated_at: string };
@@ -46,11 +46,11 @@ export default function Page() {
     <div>
       <PageHeader title="メモ" subtitle="方針・決定・約束・好みを短く残す場所。" />
 
-      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
+      {error && !data && <ErrorBanner message={error} onRetry={() => reload()} testId="load-error" />}
       <Card className="mb-6">
         <div className="flex flex-wrap gap-1.5 mb-3" role="radiogroup" aria-label="種類">
           {CATEGORIES.map((c) => (
-            <button key={c} role="radio" aria-checked={cat === c} onClick={() => setCat(c)} data-testid={`note-cat-${c}`}
+            <button key={c} type="button" role="radio" aria-checked={cat === c} onClick={() => setCat(c)} data-testid={`note-cat-${c}`}
               className={cx("focus-ring pressable rounded-full px-3 h-8 text-sm font-medium transition-colors", cat === c ? "bg-accent text-white" : "bg-fill text-label-2 hover:text-label")}>{CAT_LABELS[c]}</button>
           ))}
         </div>
@@ -64,7 +64,7 @@ export default function Page() {
 
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Segmented value={filter} onChange={setFilter} options={[{ value: "all" as Filter, label: "すべて" }, ...CATEGORIES.map((c) => ({ value: c as Filter, label: CAT_LABELS[c] }))]} />
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="検索" aria-label="検索" className="w-48" data-testid="note-search" />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="検索" aria-label="検索" className="w-full sm:w-48" data-testid="note-search" />
         <label className="flex items-center gap-2 text-sm text-label-2 ml-auto" data-testid="note-archived-toggle">アーカイブ<Toggle checked={archived} onChange={setArchived} label="アーカイブを表示" /></label>
       </div>
 
@@ -112,9 +112,9 @@ function NoteRow({ note, onChanged }: { note: Note; onChanged: () => void }) {
     <div className="p-4" data-testid="note-item">
       {editing ? (
         <div className="space-y-2">
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="種類">
             {CATEGORIES.map((c) => (
-              <button key={c} onClick={() => setCat(c)} className={cx("focus-ring rounded-full px-2.5 h-7 text-xs font-medium", cat === c ? "bg-accent text-white" : "bg-fill text-label-2")}>{CAT_LABELS[c]}</button>
+              <button key={c} type="button" role="radio" aria-checked={cat === c} onClick={() => setCat(c)} className={cx("focus-ring pressable rounded-full px-3 h-8 text-sm font-medium transition-colors", cat === c ? "bg-accent text-white" : "bg-fill text-label-2 hover:text-label")}>{CAT_LABELS[c]}</button>
             ))}
           </div>
           <Textarea value={text} onChange={(e) => setText(e.target.value)} className="min-h-20" data-testid="note-edit-input" onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save(); }} />

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { PageHeader, Card, Section, Stat, Badge, Button, PageSkeleton, EmptyState, Stagger, Item, cx } from "@/components/ui";
+import { PageHeader, Card, Section, Stat, Badge, Button, PageSkeleton, EmptyState, ErrorBanner, Stagger, Item } from "@/components/ui";
 import { useApi, fmtDateTime, fmtNum } from "@/lib/api";
 
 type Verdict = "success" | "warning" | "error" | "unknown";
@@ -24,12 +24,7 @@ export default function Page() {
     <div className="pb-10">
       <PageHeader title="バックアップ" subtitle="別PCのDropboxバックアップ結果を受信して表示します。実行・同期・削除は行いません。" />
 
-      {error && (
-        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="backup-error">
-          <span>読み込みに失敗しました（{error}）</span>
-          <Button size="sm" onClick={() => { latest.reload(); list.reload(); }}>再読み込み</Button>
-        </div>
-      )}
+      {error && <ErrorBanner message={error} onRetry={() => { latest.reload(); list.reload(); }} testId="backup-error" />}
 
       {L?.stale && run && (
         <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="mb-5 rounded-[var(--radius-lg)] bg-orange/10 text-orange px-5 py-3 text-sm flex flex-wrap items-center gap-2" role="status" data-testid="backup-stale">
@@ -62,7 +57,7 @@ export default function Page() {
         )}
       </Section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr] mt-8">
+      <div className="grid gap-6 grid-cols-1 xl:grid-cols-[1.4fr_1fr] mt-8">
         <Section title="履歴" action={list.data && <span className="text-xs text-label-3 tabular">{list.data.total}件（最大500件、30件ずつ）</span>}>
           {list.data && list.data.runs.length === 0 ? (
             <Card><EmptyState title="履歴はありません" /></Card>
@@ -99,7 +94,7 @@ export default function Page() {
             <Row k="エンドポイント"><code className="text-xs">POST {L?.endpoint ?? "/api/integrations/backups"}</code></Row>
             <Row k="ヘッダー"><code className="text-xs">Authorization: Bearer ＜送信用トークン＞</code><br /><code className="text-xs">Content-Type: application/json</code></Row>
             <Row k="本文">
-              <pre className="text-xs bg-subtle rounded-[var(--radius-md)] px-3 py-2 overflow-x-auto">{`{
+              <pre className="text-xs bg-subtle rounded-[var(--radius-md)] px-3 py-2 overflow-x-auto font-mono">{`{
   "run_id": "2026-10-20T02:00",
   "content": {
     "started_at": "…", "finished_at": "…",
@@ -112,7 +107,7 @@ export default function Page() {
 }`}</pre>
             </Row>
             <Row k="応答"><span className="tabular">新規 201 ／ 同じ実行IDの再送 200 ／ 認証失敗 401</span></Row>
-            <p className={cx("text-xs text-label-3 pt-1")}>トークンはサーバー側の環境変数 BACKUP_INGEST_TOKEN に保管し、この画面には表示しません。再発行した場合は別PC側の設定も更新してください。受信から{L?.stale_hours ?? 36}時間を超えると「未受信」と表示します。</p>
+            <p className="text-xs text-label-3 pt-1">トークンはサーバー側の環境変数 BACKUP_INGEST_TOKEN に保管し、この画面には表示しません。再発行した場合は別PC側の設定も更新してください。受信から{L?.stale_hours ?? 36}時間を超えると「未受信」と表示します。</p>
           </Card></div>
         </Section>
       </div>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { PageHeader, Card, Section, Badge, Button, Input, Select, Field, Textarea, Modal, Segmented, Toggle, PageSkeleton, EmptyState, Stagger, Item, useToast, cx } from "@/components/ui";
+import { PageHeader, Card, Badge, Button, Input, Select, Field, Textarea, Modal, Segmented, Toggle, PageSkeleton, EmptyState, ErrorBanner, Stagger, Item, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDateTime } from "@/lib/api";
 
 type Status = "target" | "review" | "excluded";
@@ -55,12 +55,7 @@ export default function Page() {
         {summary.data && summary.data.pending_target > 0 && <span className="text-xs text-label-2 ml-auto">未処理の対象 {summary.data.pending_target}件</span>}
       </div>
 
-      {(list.error || summary.error) && (
-        <div className="mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3" role="alert" data-testid="royalty-error">
-          <span>読み込みに失敗しました（{list.error ?? summary.error}）</span>
-          <Button size="sm" onClick={reload}>再読み込み</Button>
-        </div>
-      )}
+      {(list.error || summary.error) && <ErrorBanner message={list.error ?? summary.error} onRetry={reload} testId="royalty-error" />}
 
       {list.data && list.data.mails.length === 0 ? (
         <Card><EmptyState title="該当する明細通知はありません" hint="Gmailの同期、または「手動で登録」で追加できます。" /></Card>
@@ -79,13 +74,13 @@ export default function Page() {
                   <div className="text-xs text-label-3 mt-0.5 truncate">{m.sender ?? "送信元不明"}　受信 {fmtDateTime(m.received_at)}</div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
-                  <div className="inline-flex p-0.5 rounded-[var(--radius-md)] bg-fill" role="group" aria-label="状態" data-testid={`mail-status-${m.id}`}>
+                  <div className="inline-flex p-0.5 rounded-[var(--radius-md)] bg-fill" role="group" aria-label={`「${m.subject}」の状態`} data-testid={`mail-status-${m.id}`}>
                     {(["target", "review", "excluded"] as Status[]).map((s) => (
-                      <button key={s} onClick={() => patch(m, { status: s })} aria-pressed={m.status === s} className={cx("focus-ring px-2.5 h-7 rounded-[calc(var(--radius-md)-2px)] text-xs font-medium transition-colors", m.status === s ? "bg-elevated text-label shadow-[var(--shadow-card)]" : "text-label-2 hover:text-label")}>{STATUS_LABEL[s]}</button>
+                      <button key={s} type="button" onClick={() => patch(m, { status: s })} aria-pressed={m.status === s} className={cx("focus-ring px-3 h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors whitespace-nowrap", m.status === s ? "bg-elevated text-label shadow-[var(--shadow-card)]" : "text-label-2 hover:text-label")}>{STATUS_LABEL[s]}</button>
                     ))}
                   </div>
                   <label className="flex items-center gap-1.5 text-xs text-label-2" data-testid={`mail-processed-${m.id}`}><span>処理済</span><Toggle checked={m.processed} onChange={(v) => patch(m, { processed: v })} label="処理済" /></label>
-                  {m.portal && <a href={m.portal} target="_blank" rel="noreferrer" className="text-accent text-sm hover:underline whitespace-nowrap">ポータル ↗</a>}
+                  {m.portal && <a href={m.portal} target="_blank" rel="noreferrer" className="focus-ring rounded-[var(--radius-sm)] text-accent text-sm hover:underline whitespace-nowrap">ポータルを開く</a>}
                 </div>
               </Card></div>
             </Item>

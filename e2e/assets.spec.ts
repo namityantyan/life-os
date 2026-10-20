@@ -13,8 +13,9 @@ test("assets: create account, enter balance, see overview total", async ({ authe
   const qty = page.getByTestId(`qty-${name}`);
   await expect(qty).toBeVisible();
   await qty.fill("1234567");
+  await expect(qty).toHaveValue("1234567");
   await page.getByTestId("entry-save").click();
-  await expect(page.getByText(/件を保存しました/)).toBeVisible();
+  await expect(page.getByText(/^[1-9]\d*件を保存しました/)).toBeVisible();
 
   await page.goto("/assets?tab=overview");
   await expect(page.getByText("総資産（負債を除く）")).toBeVisible();

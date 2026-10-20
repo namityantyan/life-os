@@ -43,7 +43,7 @@ export async function fetchWeather(loc: WeatherLocation): Promise<WeatherSnapsho
   url.searchParams.set("timezone", "Asia/Tokyo");
   url.searchParams.set("past_days", "1");
   url.searchParams.set("forecast_days", "2");
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`open-meteo ${res.status}`);
   const j = (await res.json()) as any;
   const times: string[] = j.hourly?.time ?? [];

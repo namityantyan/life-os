@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from "react";
-import { Badge, Button, Card, ChatPanel, Skeleton, useToast, type ChatMsg } from "@/components/ui";
+import { Badge, Button, Card, ChatPanel, ErrorBanner, Skeleton, useToast, type ChatMsg } from "@/components/ui";
 import { api, useApi, fmtDateTime } from "@/lib/api";
 
 type Status = {
@@ -42,6 +42,7 @@ export function DiscordSettingsCard(): ReactElement | null {
     catch (e: any) { toast(e?.message ?? "登録に失敗しました", "error"); } finally { setBusy(null); }
   };
   const unlink = async () => {
+    if (!confirm("Discordアカウントの連携を解除しますか？")) return;
     setBusy("unlink");
     try { await api.del("/discord/link"); toast("連携を解除しました"); await reload(true); } catch (e: any) { toast(e?.message ?? "解除に失敗しました", "error"); } finally { setBusy(null); }
   };
@@ -58,7 +59,7 @@ export function DiscordSettingsCard(): ReactElement | null {
   };
 
   if (loading && !data) return <Skeleton className="h-40" />;
-  if (!data) return <div data-testid="discord-card"><Card className="text-sm text-red flex items-center justify-between gap-3"><span>Discord BOTの状態を取得できませんでした{error ? `（${error}）` : ""}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></Card></div>;
+  if (!data) return <div data-testid="discord-card"><ErrorBanner message={error ? `Discord BOT: ${error}` : "Discord BOT"} onRetry={() => reload()} className="mb-0" /></div>;
   const conf = data.configured;
 
   return (
@@ -79,8 +80,8 @@ export function DiscordSettingsCard(): ReactElement | null {
 
       <div className="space-y-1 text-sm">
         <div className="text-xs text-label-2 font-medium">Interactions Endpoint URL</div>
-        <div className="flex items-center gap-2"><code className="text-xs bg-fill rounded-[var(--radius-md)] px-2 py-1 break-all flex-1">{data.interactions_url}</code><Button size="sm" variant="ghost" onClick={() => copy(data.interactions_url)}>コピー</Button></div>
-        {data.invite_url && <a className="text-xs text-accent" href={data.invite_url} target="_blank" rel="noreferrer">BOTをサーバーに招待（bot + applications.commands）</a>}
+        <div className="flex items-center gap-2"><code className="text-xs bg-fill rounded-[var(--radius-md)] px-2 py-1 break-all flex-1">{data.interactions_url}</code><Button size="sm" variant="ghost" onClick={() => copy(data.interactions_url)} aria-label="Interactions Endpoint URLをコピー">コピー</Button></div>
+        {data.invite_url && <a className="focus-ring rounded-[var(--radius-sm)] text-xs text-accent" href={data.invite_url} target="_blank" rel="noreferrer">BOTをサーバーに招待（bot + applications.commands）</a>}
       </div>
 
       <div className="space-y-2">

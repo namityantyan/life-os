@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { api, useApi, fmtDateTime } from "@/lib/api";
-import { Badge, Button, Card, EmptyState, Field, Item, Modal, PageHeader, PageSkeleton, Segmented, Select, Stagger, Textarea, Input, Toggle, useToast, cx } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorBanner, Field, Item, Modal, PageHeader, PageSkeleton, Segmented, Select, Stagger, Textarea, Input, Toggle, useToast, cx } from "@/components/ui";
 
 type IdeaStatus = "inbox" | "someday" | "next" | "done";
 type Idea = { id: string; raw_text: string; title: string | null; markdown: string | null; status: IdeaStatus; organized_at: string | null; archived_at: string | null; created_at: string; updated_at: string };
@@ -42,14 +42,14 @@ export default function Page() {
   return (
     <div>
       <PageHeader title="アイデア" subtitle="思いついたことをそのまま残し、必要なときにAIで整理してObsidianへ。" actions={
-        <a href="/api/ideas/export" download="ideas-export.md" className="pressable focus-ring inline-flex items-center h-10 px-4 rounded-[var(--radius-md)] bg-fill text-label text-base font-medium" data-testid="idea-export">一括エクスポート</a>
+        <a href="/api/ideas/export" download="ideas-export.md" className="pressable focus-ring inline-flex items-center h-10 px-4 rounded-[var(--radius-md)] bg-fill text-label text-base font-medium whitespace-nowrap hover:bg-fill-strong" data-testid="idea-export">一括エクスポート</a>
       } />
 
-      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
+      {error && !data && <ErrorBanner message={error} onRetry={() => reload()} testId="load-error" />}
       <Card className="mb-6">
         <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="思いついたことを、そのまま書く。" aria-label="アイデア" data-testid="idea-compose"
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save(); }} />
-        <div className="flex items-center justify-between mt-3">
+        <div className="flex items-center justify-between mt-3 gap-3">
           <span className="text-xs text-label-3">原文はそのまま保存されます。整理はあとからでも。</span>
           <Button variant="primary" onClick={save} loading={saving} disabled={!draft.trim()} data-testid="idea-save">保存</Button>
         </div>

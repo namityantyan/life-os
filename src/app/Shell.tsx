@@ -6,6 +6,7 @@ import { useAuth } from "./auth";
 import { cx, IconButton } from "@/components/ui";
 import { NotificationBell } from "./NotificationBell";
 import { CommandPalette } from "./CommandPalette";
+import { AssistantPanel } from "./AssistantPanel";
 
 /** Modules reachable from the mobile bottom tab bar; everything else stays in the drawer. */
 const TAB_KEYS: ModuleKey[] = ["dashboard", "planner", "health", "training", "cards"];
@@ -19,6 +20,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("lifeos.sidebar") === "1"; } catch { return false; } });
   const [drawer, setDrawer] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [assistant, setAssistant] = useState(false);
   const loc = useLocation();
   const { user, logout } = useAuth();
   useEffect(() => { setDrawer(false); }, [loc.pathname]);
@@ -92,6 +94,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="font-semibold tracking-tight md:text-label-2 md:font-medium">{current?.label ?? "Life OS"}</div>
           <div className="flex-1" />
           <IconButton label="検索・コマンド（⌘K）" onClick={() => setPalette(true)} data-testid="palette-button">⌕</IconButton>
+          <IconButton label="アシスタント（⌘J）" onClick={() => setAssistant(true)} data-testid="assistant-button">✧</IconButton>
           <NotificationBell />
         </header>
         <main className="flex-1 px-4 md:px-8 pt-6 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-6 max-w-[1400px] w-full mx-auto">
@@ -123,6 +126,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
+      <AssistantPanel open={assistant} onOpenChange={setAssistant} />
     </div>
   );
 }

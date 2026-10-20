@@ -80,8 +80,8 @@ function GoogleRow({ s, onChanged }: { s: Status; onChanged: () => void }) {
   return (
     <Row title="Google（カレンダー・Gmail）" connected={any} badge={any && !(cal.connected && gm.connected) ? "一部接続" : undefined} testId="integration-google">
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-        <span className="flex items-center gap-1.5" data-testid="google-calendar-state"><Dot on={cal.connected} />カレンダー{cal.connected ? "" : "（未接続）"}</span>
-        <span className="flex items-center gap-1.5" data-testid="google-gmail-state"><Dot on={gm.connected} />Gmail{gm.connected ? "" : "（未接続）"}</span>
+        <span className="flex items-center gap-1.5" data-testid="google-calendar-state"><Dot on={cal.connected} />カレンダー{cal.connected ? "（接続済み）" : "（未接続）"}</span>
+        <span className="flex items-center gap-1.5" data-testid="google-gmail-state"><Dot on={gm.connected} />Gmail{gm.connected ? "（接続済み）" : "（未接続）"}</span>
       </div>
       {any && <div className="text-xs text-label-2">接続日時 <span className="tabular" data-testid="google-connected-at">{fmtDateTime(connectedAt)}</span>・読み取り専用</div>}
       {!(cal.connected && gm.connected) && (
@@ -98,7 +98,7 @@ function GoogleRow({ s, onChanged }: { s: Status; onChanged: () => void }) {
         {!(cal.connected && gm.connected) && (
           <Button variant="primary" size="sm" onClick={connect} disabled={!s.configured.google || selected.length === 0} data-testid="google-connect">{any ? "追加で接続する" : "接続する"}</Button>
         )}
-        {any && <Button variant="ghost" size="sm" onClick={disconnect} loading={busy} data-testid="google-disconnect">解除</Button>}
+        {any && <Button variant="danger" size="sm" onClick={disconnect} loading={busy} data-testid="google-disconnect">解除</Button>}
       </div>
       {!s.configured.google && <p className="text-xs text-label-3" data-testid="google-unconfigured">GOOGLE_CLIENT_ID が未設定のため接続できません。Cloudflare のシークレットに設定してください（docs/MORNING_TODO.md）。</p>}
     </Row>
@@ -143,7 +143,7 @@ function OuraRow({ s, onChanged }: { s: Status; onChanged: () => void }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="tinted" size="sm" onClick={sync} loading={busy === "sync"} data-testid="oura-sync">今すぐ同期</Button>
-            {o.via !== "env" && <Button variant="ghost" size="sm" onClick={disconnect} loading={busy === "disconnect"} data-testid="oura-disconnect">解除</Button>}
+            {o.via !== "env" && <Button variant="danger" size="sm" onClick={disconnect} loading={busy === "disconnect"} data-testid="oura-disconnect">解除</Button>}
           </div>
         </>
       ) : (
@@ -167,7 +167,7 @@ function FreeeRow({ s }: { s: Status }) {
       <div className="text-xs text-label-2">
         {f.connected ? <>接続日時 <span className="tabular">{fmtDateTime(f.connected_at)}</span>・銀行同期残高を約1時間ごとに読み取り</> : s.configured.freee ? "未接続です。" : "FREEE_CLIENT_ID / FREEE_CLIENT_SECRET が未設定のため接続できません。"}
       </div>
-      <Link to="/assets?tab=accounts" className="text-sm text-accent hover:underline" data-testid="freee-link">資産 → 口座 で{f.connected ? "管理する" : "接続する"} →</Link>
+      <Link to="/assets?tab=accounts" className="focus-ring rounded-[var(--radius-sm)] text-sm text-accent hover:underline" data-testid="freee-link">資産の「口座の管理」で{f.connected ? "管理する" : "接続する"}</Link>
     </Row>
   );
 }

@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   PageHeader, PageSkeleton, Segmented, Card, Section, Stat, Badge, Button, IconButton, Input, Select, Textarea, Field, Modal,
-  EmptyState, Stagger, Item, ChatPanel, useToast, cx, type ChatMsg,
+  EmptyState, ErrorBanner, Stagger, Item, ChatPanel, ChartTip, Table, Th, Td, trCls, useChartColors, useToast, cx, type ChatMsg,
 } from "@/components/ui";
-import { api, useApi, fmtNum, fmtYen, fmtDate, fmtDateTime } from "@/lib/api";
+import { api, useApi, fmtNum, fmtYen, fmtDate, fmtDateTime, todayJst } from "@/lib/api";
 import type { PressureAssessment, PressureLevel } from "@shared/types";
 
 /* ======================================================================
@@ -104,7 +104,8 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
   const [syncing, setSyncing] = useState(false);
   const [logging, setLogging] = useState(false);
   const [editing, setEditing] = useState<PressureLog | null>(null);
-  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} />;
+  const cc = useChartColors();
+  if (!data) return <div><ErrorBanner message={error} onRetry={reload} testId="health-error" /><EmptyState title="体調を読み込めませんでした" /></div>;
   const o = data.oura;
   const stale = o != null && !o.is_today;
   const sync = async () => {
@@ -117,18 +118,19 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
     try { const r = await api.post<{ item: PressureLog; weather_available: boolean }>("/health/pressure/logs", {}); toast(r.weather_available ? "記録しました" : "記録しました（気圧は未取得）", "success"); reload(); }
     catch (e: any) { toast(e?.message ?? "記録に失敗しました", "error"); } finally { setLogging(false); }
   };
-  const del = async (id: string) => { try { await api.del(`/health/pressure/logs/${id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
-  const chartData = data.series.map((r) => ({ day: r.day.slice(5).replace("-", "/"), value: r[metric] }));
+  const del = async (l: PressureLog) => { if (!confirm(`${fmtDateTime(l.logged_at)} の記録を削除しますか？`)) return; try { await api.del(`/health/pressure/logs/${l.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const chartData = data.series.map((r) => ({ day: fmtDate(r.day), value: r[metric] }));
   const p = data.weather?.pressure ?? null;
   const personal = data.personal;
   return (
     <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
+      {error && <div className="xl:col-span-3"><ErrorBanner message={error} onRetry={reload} className="mb-0" testId="health-error" /></div>}
       <div className="xl:col-span-2 space-y-4">
-        <Card as="section" className="space-y-4" >
+        <Card as="section" className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2" data-testid="oura-card">
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold tracking-tight">Oura</h2>
-              {o ? <Badge tone={stale ? "orange" : "green"}>記録日 {o.day.slice(5).replace("-", "/")}{stale ? "（今日の値ではありません）" : "（今日）"}</Badge> : <Badge>未同期</Badge>}
+              {o ? <Badge tone={stale ? "orange" : "green"}>記録日 {fmtDate(o.day)}{stale ? "（今日の値ではありません）" : "（今日）"}</Badge> : <Badge>未同期</Badge>}
             </div>
             <Button size="sm" onClick={sync} loading={syncing} data-testid="oura-sync">今すぐ同期</Button>
           </div>
@@ -153,17 +155,17 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
             <div className="h-40">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: "var(--label-2)" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                  <XAxis dataKey="day" tick={{ fontSize: cc.tickFont, fill: cc.label2 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                   <YAxis hide domain={["auto", "auto"]} />
-                  <Tooltip contentStyle={{ background: "var(--bg-elevated)", border: "none", borderRadius: 10, fontSize: 12 }} formatter={(v: any) => [v == null ? "—" : fmtNum(Number(v)), ""]} />
-                  <Line type="monotone" dataKey="value" stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls={false} isAnimationActive />
+                  <Tooltip cursor={{ stroke: cc.label3 }} content={({ active, payload }) => active && payload?.[0] ? <ChartTip label={(payload[0].payload as { day: string }).day} value={payload[0].value == null ? "—" : fmtNum(Number(payload[0].value))} /> : null} />
+                  <Line type="monotone" dataKey="value" stroke={cc.accent} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           )}
         </Card>
 
-        <Card as="section" className="space-y-4" >
+        <Card as="section" className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2" data-testid="pressure-card">
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold tracking-tight">気圧</h2>
@@ -174,7 +176,7 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
           </div>
           {!data.weather_configured && <p className="text-sm text-label-2">設定の「天気と体調」で位置を登録すると、気圧の変化を表示します。</p>}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Stat label="現在" value={p?.current != null ? `${fmtNum(p.current, 1)}` : "—"} hint="hPa" />
+            <Stat label="現在" value={p?.current != null ? `${fmtNum(p.current, 1)} hPa` : "—"} />
             <Stat label="3時間" value={fmtDelta(p?.delta3h)} tone={p && p.delta3h != null && Math.abs(p.delta3h) >= 2.5 ? (Math.abs(p.delta3h) >= 4 ? "red" : "orange") : undefined} />
             <Stat label="6時間" value={fmtDelta(p?.delta6h)} tone={p && p.delta6h != null && Math.abs(p.delta6h) >= 4 ? (Math.abs(p.delta6h) >= 6 ? "red" : "orange") : undefined} />
             <Stat label="12時間の幅" value={p?.range12h != null ? `${fmtNum(p.range12h, 1)} hPa` : "—"} />
@@ -190,13 +192,13 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
             {data.pressure_logs.length === 0 ? <div className="text-sm text-label-3 py-3">記録はありません</div> : (
               <Stagger className="divide-y divide-separator">
                 {data.pressure_logs.map((l) => (
-                  <Item key={l.id} className="flex items-center gap-3 py-2" >
+                  <Item key={l.id} className="flex items-center gap-3 py-2">
                     <div className="flex-1 min-w-0" data-testid="pressure-log-item">
                       <div className="text-sm">{fmtDateTime(l.logged_at)} <span className="text-label-2">{l.symptom ?? "症状未入力"}{l.severity != null ? `・強さ${l.severity}` : ""}</span></div>
                       <div className="text-xs text-label-3 tabular">{l.pressure_hpa != null ? `${fmtNum(l.pressure_hpa, 1)} hPa` : "気圧 —"}・3h {fmtDelta(l.delta3h)}・6h {fmtDelta(l.delta6h)}</div>
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => setEditing(l)}>編集</Button>
-                    <IconButton label="削除" onClick={() => del(l.id)}>✕</IconButton>
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(l)} aria-label={`${fmtDateTime(l.logged_at)} の記録を編集`}>編集</Button>
+                    <IconButton label={`${fmtDateTime(l.logged_at)} の記録を削除`} className="text-red hover:text-red" onClick={() => del(l)}>✕</IconButton>
                   </Item>
                 ))}
               </Stagger>
@@ -243,7 +245,7 @@ function MealTab() {
   const [applying, setApplying] = useState(false);
   const reload = () => meals.reload(true);
   if (meals.loading && !meals.data) return <PageSkeleton cards={3} />;
-  const d = meals.data; if (!d) return <EmptyState title="読み込めませんでした" hint={meals.error ?? undefined} />;
+  const d = meals.data; if (!d) return <div><ErrorBanner message={meals.error} onRetry={() => meals.reload()} testId="health-error" /><EmptyState title="食事を読み込めませんでした" /></div>;
   const { totals, partial, item_count, with_nutrition, estimated_count } = d.summary.nutrition;
   const cost = d.summary.cost; const targets = d.summary.targets;
 
@@ -259,7 +261,7 @@ function MealTab() {
       else if (r.reason === "ai_unavailable") toast("AIに接続できないため推定できません", "error");
     } catch (e: any) { toast(e?.message ?? "推定に失敗しました", "error"); } finally { setEstimating(null); }
   };
-  const del = async (m: Meal) => { try { await api.del(`/health/meals/${m.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const del = async (m: Meal) => { if (!confirm(`「${m.food_name}」を削除しますか？`)) return; try { await api.del(`/health/meals/${m.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   const applyTargets = async (t: Nutrition) => { setApplying(true); try { await api.put("/health/targets", t); toast("目標を保存しました", "success"); reload(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setApplying(false); } };
   const applyEstimates = async (ests: { food_name: string; nutrition: Nutrition }[]) => {
     setApplying(true);
@@ -291,7 +293,7 @@ function MealTab() {
           {item_count === 0 ? <p className="text-sm text-label-3">ルーティンを登録すると集計します。</p> : (
             <div className="space-y-2">
               {(showExtra ? [...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS] : MAIN_NUTRIENTS).map((n) => <NutrientBar key={n.key} label={n.label} unit={n.unit} value={totals[n.key] ?? null} target={targets[n.key] ?? null} partial={partial} />)}
-              <button className="text-xs text-accent" onClick={() => setShowExtra((v) => !v)}>{showExtra ? "主要項目だけ表示" : "ミネラル・ビタミンも表示"}</button>
+              <Button size="sm" variant="ghost" aria-expanded={showExtra} onClick={() => setShowExtra((v) => !v)}>{showExtra ? "主要項目だけ表示" : "ミネラル・ビタミンも表示"}</Button>
               {partial && <p className="text-xs text-label-2">栄養が未計算の食品があるため、合計は途中の値です。不足・過剰は断定しません。</p>}
             </div>
           )}
@@ -318,9 +320,9 @@ function MealTab() {
                           </div>
                           <div className="text-xs text-label-3 tabular">{m.nutrition ? `${fmtNum(m.nutrition.energy_kcal)} kcal・P ${fmtNum(m.nutrition.protein_g)}・F ${fmtNum(m.nutrition.fat_g)}・C ${fmtNum(m.nutrition.carbs_g)}` : "—"}・{m.cost_per_serving == null ? "費用未入力" : fmtYen(m.cost_per_serving)}</div>
                         </div>
-                        <Button size="sm" variant="ghost" onClick={() => estimate(m)} loading={estimating === m.id} data-testid="meal-estimate">AI推定</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(m)}>編集</Button>
-                        <IconButton label="削除" onClick={() => del(m)}>✕</IconButton>
+                        <Button size="sm" variant="ghost" onClick={() => estimate(m)} loading={estimating === m.id} aria-label={`${m.food_name}の栄養をAIで推定`} data-testid="meal-estimate">AI推定</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(m)} aria-label={`${m.food_name}を編集`}>編集</Button>
+                        <IconButton label={`${m.food_name}を削除`} className="text-red hover:text-red" onClick={() => del(m)}>✕</IconButton>
                       </Item>
                     ))}
                   </Stagger>
@@ -428,10 +430,10 @@ function BeautyTab() {
   const [applying, setApplying] = useState(false);
   const reload = () => data.reload(true);
   if (data.loading && !data.data) return <PageSkeleton cards={3} />;
-  const d = data.data; if (!d) return <EmptyState title="読み込めませんでした" hint={data.error ?? undefined} />;
+  const d = data.data; if (!d) return <div><ErrorBanner message={data.error} onRetry={() => data.reload()} testId="health-error" /><EmptyState title="美容を読み込めませんでした" /></div>;
   const prop = chat.lastProposal as { keep: string[]; add: string[]; review: string[] } | null;
   const applyPolicy = async (p: { keep: string[]; add: string[]; review: string[] }) => { setApplying(true); try { await api.put("/health/beauty/policy", p); toast("方針を保存しました", "success"); reload(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setApplying(false); } };
-  const del = async (b: Beauty) => { try { await api.del(`/health/beauty/${b.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const del = async (b: Beauty) => { if (!confirm(`「${b.name}」を削除しますか？`)) return; try { await api.del(`/health/beauty/${b.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   const PolicyList = ({ title, items, tone }: { title: string; items: string[]; tone: "green" | "accent" | "orange" }) => (
     <div><div className="flex items-center gap-2 mb-1"><Badge tone={tone}>{title}</Badge></div>{items.length ? <ul className="text-sm space-y-0.5">{items.map((s, i) => <li key={i}>・{s}</li>)}</ul> : <div className="text-sm text-label-3">なし</div>}</div>
   );
@@ -448,15 +450,15 @@ function BeautyTab() {
                       <div className="flex items-center gap-2 flex-wrap"><span className="font-medium">{b.name}</span>{b.timing && <Badge>{b.timing}</Badge>}</div>
                       <div className="text-xs text-label-2">{[b.product, b.purpose].filter(Boolean).join("・") || "—"}</div>
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => setEditing(b)}>編集</Button>
-                    <IconButton label="削除" onClick={() => del(b)}>✕</IconButton>
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(b)} aria-label={`${b.name}を編集`}>編集</Button>
+                    <IconButton label={`${b.name}を削除`} className="text-red hover:text-red" onClick={() => del(b)}>✕</IconButton>
                   </Item>
                 ))}
               </Stagger>
             </Card>
           )}
         </Section>
-        <Card as="section" className="space-y-3" >
+        <Card as="section" className="space-y-3">
           <div className="flex items-center justify-between" data-testid="beauty-policy"><h2 className="text-lg font-semibold tracking-tight">方針</h2>{d.policy?.updated_at && <span className="text-xs text-label-3">{fmtDate(d.policy.updated_at)} 更新</span>}</div>
           {d.policy ? <div className="grid sm:grid-cols-3 gap-4"><PolicyList title="続けること" items={d.policy.keep} tone="green" /><PolicyList title="追加候補" items={d.policy.add} tone="accent" /><PolicyList title="見直すこと" items={d.policy.review} tone="orange" /></div>
             : <p className="text-sm text-label-3">美容チャットの提案を「この方針を使う」で保存すると、ここに表示されます。</p>}
@@ -503,11 +505,11 @@ function BeautyModal({ item, onClose, onSaved }: { item: Beauty | "new" | null; 
 function CheckupTab() {
   const toast = useToast();
   const data = useApi<{ items: Checkup[] }>("/health/checkups");
-  const [f, setF] = useState<Record<string, string>>({ checkup_date: new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) });
+  const [f, setF] = useState<Record<string, string>>({ checkup_date: todayJst() });
   const [saving, setSaving] = useState(false);
   const reload = () => data.reload(true);
   if (data.loading && !data.data) return <PageSkeleton cards={2} />;
-  if (!data.data) return <EmptyState title="読み込めませんでした" hint={data.error ?? undefined} />;
+  if (!data.data) return <div><ErrorBanner message={data.error} onRetry={() => data.reload()} testId="health-error" /><EmptyState title="検診を読み込めませんでした" /></div>;
   const items = data.data.items;
   const save = async () => {
     const body: Record<string, unknown> = { checkup_date: f.checkup_date, notes: f.notes?.trim() || null };
@@ -516,7 +518,7 @@ function CheckupTab() {
     try { await api.post("/health/checkups", body); toast("保存しました", "success"); setF({ checkup_date: f.checkup_date }); reload(); }
     catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
   };
-  const del = async (c: Checkup) => { if (!confirm(`${c.checkup_date} の検診記録を削除しますか？`)) return; try { await api.del(`/health/checkups/${c.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
+  const del = async (c: Checkup) => { if (!confirm(`${fmtDate(c.checkup_date)} の検診記録を削除しますか？`)) return; try { await api.del(`/health/checkups/${c.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
   return (
     <div className="space-y-4">
       <Card as="section" className="space-y-4">
@@ -533,20 +535,20 @@ function CheckupTab() {
       </Card>
       <Section title="履歴">
         {items.length === 0 ? <Card><EmptyState title="検診記録がありません" hint="年1回程度の更新を想定しています。" /></Card> : (
-          <Card padded={false} className="overflow-auto">
-            <table className="w-full text-sm tabular" data-testid="checkup-table">
-              <thead><tr className="text-xs text-label-2 text-left"><th className="px-4 py-2.5 font-medium sticky left-0 bg-elevated">受診日</th>{CHECKUP_FIELDS.map((c) => <th key={c.key} className="px-3 py-2.5 font-medium whitespace-nowrap">{c.label}</th>)}<th className="px-3 py-2.5 font-medium">メモ</th><th /></tr></thead>
+          <Card padded={false}>
+            <Table testId="checkup-table">
+              <thead><tr><Th className="sticky left-0 bg-elevated">受診日</Th>{CHECKUP_FIELDS.map((c) => <Th key={c.key} align="right">{c.label}<span className="block font-normal text-label-3">{c.unit}</span></Th>)}<Th>メモ</Th><Th><span className="sr-only">操作</span></Th></tr></thead>
               <tbody>
                 {items.map((c) => (
-                  <tr key={c.id} className="border-t border-separator" data-testid="checkup-row">
-                    <td className="px-4 py-2.5 whitespace-nowrap font-medium sticky left-0 bg-elevated">{c.checkup_date}</td>
-                    {CHECKUP_FIELDS.map((x) => <td key={x.key} className="px-3 py-2.5 whitespace-nowrap">{c[x.key] == null ? "—" : fmtNum(c[x.key], x.key === "hba1c" || x.key === "creatinine" || x.key === "uric_acid" ? 1 : 0)}</td>)}
-                    <td className="px-3 py-2.5 text-label-2 max-w-[16rem] truncate">{c.notes ?? "—"}</td>
-                    <td className="px-2"><IconButton label="削除" onClick={() => del(c)}>✕</IconButton></td>
+                  <tr key={c.id} className={trCls} data-testid="checkup-row">
+                    <Td className="font-medium sticky left-0 bg-elevated">{c.checkup_date}</Td>
+                    {CHECKUP_FIELDS.map((x) => <Td key={x.key} align="right" className={c[x.key] == null ? "text-label-3" : undefined}>{c[x.key] == null ? "—" : fmtNum(c[x.key], x.key === "hba1c" || x.key === "creatinine" || x.key === "uric_acid" ? 1 : 0)}</Td>)}
+                    <Td className="text-label-2 max-w-[16rem] truncate">{c.notes ?? "—"}</Td>
+                    <Td className="px-2"><IconButton label={`${fmtDate(c.checkup_date)} の記録を削除`} className="text-red hover:text-red" onClick={() => del(c)}>✕</IconButton></Td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </Card>
         )}
       </Section>

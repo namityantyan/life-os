@@ -49,7 +49,7 @@ export default function Page() {
   const openAdd = (preset: AddPreset | null) => { setAddPreset(preset); setAddOpen(true); };
 
   if (!list.data) {
-    if (list.error) return <div><PageHeader title="スケジュール" /><EmptyState title="読み込めませんでした" hint={list.error} action={<Button onClick={() => list.reload()} data-testid="load-retry">再読み込み</Button>} /></div>;
+    if (list.error) return <div><PageHeader title="スケジュール" /><EmptyState title="予定を読み込めませんでした" hint={list.error} action={<Button onClick={() => list.reload()} data-testid="load-retry">再読み込み</Button>} /></div>;
     return <PageSkeleton />;
   }
 
@@ -65,15 +65,16 @@ export default function Page() {
           <Button variant="primary" onClick={() => openAdd(null)} data-testid="add-button">追加</Button>
         </>} />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="space-y-2 min-w-0">
           <WeekGrid days={days} items={list.data.items} google={google.data?.items ?? []}
             onDrop={onDrop} onResize={onResize} onOpen={setSelected}
             onCellDblClick={(date, minutes) => openAdd({ date, minutes: minutes ?? undefined, type: minutes == null ? "task" : "event" })}
             onShiftDays={(n) => setStart((s) => addDays(s, n))} />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-label-3">
-            <span>Shift＋スクロールで日を移動</span>
-            <span>ダブルクリックで追加</span>
+            <span className="hidden md:inline">Shift＋スクロールで日を移動</span>
+            <span className="hidden md:inline">ダブルクリックで追加</span>
+            <span className="md:hidden">横にスクロールして週を確認</span>
             <span data-testid="google-status">
               {google.loading ? "Googleカレンダー: 取得中" : google.data?.connected ? (google.data.error ? "Googleカレンダー: 未取得" : `Googleカレンダー: ${google.data.items.length}件（参照用）`) : "Googleカレンダー: 未接続"}
             </span>

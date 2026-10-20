@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createChart, CandlestickSeries, LineSeries, createSeriesMarkers, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp, type ISeriesMarkersPluginApi, type Time } from "lightweight-charts";
 import type { ChartResponse } from "@shared/fx";
+import { useChartColors } from "@/components/ui";
 
 const jst = (sec: number, withDate: boolean) => {
   const d = new Date(sec * 1000);
@@ -25,17 +26,18 @@ export default function ChartView({ data, hidden, fitAll, onReachStart, onShiftW
   const lines = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const priceLines = useRef<IPriceLine[]>([]);
   const markers = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const latest = useRef({ data, hidden, fitAll, onReachStart, onShiftWheel });
-  latest.current = { data, hidden, fitAll, onReachStart, onShiftWheel };
+  const cc = useChartColors();
+  const latest = useRef({ data, hidden, fitAll, onReachStart, onShiftWheel, cc });
+  latest.current = { data, hidden, fitAll, onReachStart, onShiftWheel, cc };
 
   // create once
   useEffect(() => {
     const el = ref.current; if (!el) return;
-    const css = getComputedStyle(document.documentElement);
+    const c0 = latest.current.cc;
     const c = createChart(el, {
       autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: css.getPropertyValue("--label-2").trim() || "#888", fontFamily: css.getPropertyValue("--font-sans") || undefined, attributionLogo: false },
-      grid: { vertLines: { color: "rgba(120,120,128,0.08)" }, horzLines: { color: "rgba(120,120,128,0.08)" } },
+      layout: { background: { color: "transparent" }, textColor: c0.label2, fontFamily: c0.fontSans, fontSize: c0.tickFont, attributionLogo: false },
+      grid: { vertLines: { color: c0.separator }, horzLines: { color: c0.separator } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.12 } },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 4, tickMarkFormatter: (t: Time, type: number) => jst(t as number, type < 3) },
       localization: { timeFormatter: (t: Time) => jst(t as number, true) },
@@ -44,7 +46,7 @@ export default function ChartView({ data, hidden, fitAll, onReachStart, onShiftW
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
     });
     const s = c.addSeries(CandlestickSeries, {
-      upColor: "#34c759", downColor: "#ff3b30", borderVisible: false, wickUpColor: "#34c759", wickDownColor: "#ff3b30",
+      upColor: c0.green, downColor: c0.red, borderVisible: false, wickUpColor: c0.green, wickDownColor: c0.red,
       autoscaleInfoProvider: (orig: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
         const { data: d, fitAll: f, hidden: h } = latest.current;
         if (d.candles.length === 0) return orig();
@@ -70,6 +72,13 @@ export default function ChartView({ data, hidden, fitAll, onReachStart, onShiftW
     return () => { el.removeEventListener("wheel", onWheel); c.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); c.remove(); chart.current = null; candles.current = null; lines.current.clear(); priceLines.current = []; markers.current = null; };
   }, []);
 
+  // theme / font-scale changes: re-apply token colors without recreating the chart
+  useEffect(() => {
+    const c = chart.current, s = candles.current; if (!c || !s) return;
+    c.applyOptions({ layout: { textColor: cc.label2, fontFamily: cc.fontSans, fontSize: cc.tickFont }, grid: { vertLines: { color: cc.separator }, horzLines: { color: cc.separator } } });
+    s.applyOptions({ upColor: cc.green, downColor: cc.red, wickUpColor: cc.green, wickDownColor: cc.red });
+  }, [cc]);
+
   // data / visibility updates
   useEffect(() => {
     const c = chart.current, s = candles.current; if (!c || !s) return;
@@ -80,23 +89,23 @@ export default function ChartView({ data, hidden, fitAll, onReachStart, onShiftW
     for (const l of data.lines) {
       seen.add(l.key);
       let ls = lines.current.get(l.key);
-      if (!ls) { ls = c.addSeries(LineSeries, { color: l.color ?? "#888", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "", autoscaleInfoProvider: () => null }); lines.current.set(l.key, ls); }
-      ls.applyOptions({ visible: !hidden[l.key], color: l.color ?? "#888" });
+      if (!ls) { ls = c.addSeries(LineSeries, { color: l.color ?? cc.label3, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "", autoscaleInfoProvider: () => null }); lines.current.set(l.key, ls); }
+      ls.applyOptions({ visible: !hidden[l.key], color: l.color ?? cc.label3 });
       ls.setData(l.points.filter((p) => p.time >= minT - 1 && p.time <= maxT + 1).map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
     }
     for (const [k, ls] of lines.current) if (!seen.has(k)) { c.removeSeries(ls); lines.current.delete(k); }
     for (const pl of priceLines.current) s.removePriceLine(pl);
-    priceLines.current = data.levels.filter((l) => !hidden[l.group]).map((l) => s.createPriceLine({ price: l.price, color: l.color ?? "#8e8e93", lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.label }));
+    priceLines.current = data.levels.filter((l) => !hidden[l.group]).map((l) => s.createPriceLine({ price: l.price, color: l.color ?? cc.label3, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.label }));
     markers.current?.setMarkers(hidden.markers ? [] : data.markers.map((m) => ({
       time: m.time as UTCTimestamp,
       position: m.kind === "exit" ? (m.side === "BUY" ? "aboveBar" : "belowBar") : m.side === "BUY" ? "belowBar" : "aboveBar",
       shape: m.kind === "signal" ? "circle" : m.side === "BUY" ? "arrowUp" : "arrowDown",
-      color: m.kind === "exit" ? "#8e8e93" : m.side === "BUY" ? "#0a84ff" : "#ff3b30",
+      color: m.kind === "exit" ? cc.label3 : m.side === "BUY" ? cc.accent : cc.red,
       text: m.label, size: m.kind === "signal" ? 0.8 : 1,
     })));
     s.priceScale().applyOptions({ autoScale: true });
     c.timeScale().fitContent();
-  }, [data, hidden, fitAll]);
+  }, [data, hidden, fitAll, cc]);
 
   return <div ref={ref} className="absolute inset-0" data-testid="fx-chart-canvas" />;
 }

@@ -4,7 +4,7 @@ import type { NotificationPrefs, WeatherLocation } from "@shared/types";
 import { NOTIFICATION_KINDS, NOTIFICATION_KIND_LABELS } from "@shared/types";
 import { api, useApi } from "@/lib/api";
 import { useTheme } from "@/app/theme";
-import { Badge, Button, Card, Field, Input, PageHeader, PageSkeleton, Section, Segmented, Toggle, useToast, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, Field, Input, PageHeader, PageSkeleton, Section, Segmented, Toggle, useToast, Skeleton, ErrorBanner } from "@/components/ui";
 import { IntegrationsCard } from "./IntegrationsCard";
 import { DataCard } from "./DataCard";
 
@@ -15,7 +15,7 @@ type SettingsRes = { settings: Record<string, any>; vapidPublicKey: string | nul
 function urlB64ToU8(b64: string) { const pad = "=".repeat((4 - (b64.length % 4)) % 4); const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); }
 
 export default function Page() {
-  const { data, loading, reload } = useApi<SettingsRes>("/settings");
+  const { data, loading, error, reload } = useApi<SettingsRes>("/settings");
   const subs = useApi<{ items: { id: string; endpoint: string; user_agent: string | null; label: string | null; enabled: number; created_at: string }[] }>("/push/subscriptions");
   const toast = useToast();
   const loc = useLocation();
@@ -26,7 +26,7 @@ export default function Page() {
   useEffect(() => { if (data?.settings.morning_contents) setMorning(data.settings.morning_contents); }, [data]);
   useEffect(() => { if (loc.hash && data) setTimeout(() => document.querySelector(loc.hash)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }, [loc.hash, data]);
   if (loading && !data) return <PageSkeleton cards={4} />;
-  if (!data) return null;
+  if (!data) return <div><PageHeader title="設定" /><ErrorBanner message={error} onRetry={() => reload()} testId="settings-error" /></div>;
   const prefsN: NotificationPrefs = data.settings.notification_prefs;
   const weather: WeatherLocation | null = data.settings.weather_location ?? null;
 
@@ -92,8 +92,8 @@ export default function Page() {
           <ul className="divide-y divide-separator">
             {subs.loading && <Skeleton className="h-10" />}
             {(subs.data?.items ?? []).map((s) => (
-              <li key={s.id} className="flex items-center justify-between py-2 text-sm"><span className="truncate text-label-2">{s.label ?? "端末"} · {s.user_agent?.slice(0, 40) ?? ""}</span>
-                {s.enabled ? <Button size="sm" variant="ghost" onClick={async () => { await api.post("/push/unsubscribe", { id: s.id }); subs.reload(true); }}>解除</Button> : <Badge>解除済み</Badge>}</li>
+              <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm"><span className="truncate text-label-2 min-w-0">{s.label ?? "端末"} · {s.user_agent?.slice(0, 40) ?? ""}</span>
+                {s.enabled ? <Button size="sm" variant="danger" aria-label={`${s.label ?? "端末"}の通知を解除`} onClick={async () => { if (!confirm(`「${s.label ?? "端末"}」の通知登録を解除しますか？`)) return; await api.post("/push/unsubscribe", { id: s.id }); subs.reload(true); toast("解除しました"); }}>解除</Button> : <Badge>解除済み</Badge>}</li>
             ))}
           </ul>
         </Card>
@@ -106,7 +106,7 @@ export default function Page() {
             <Input value={geoQ} onChange={(e) => setGeoQ(e.target.value)} placeholder="市区町村名（例: 渋谷区）" data-testid="geo-input" />
             <Button type="submit" variant="tinted" data-testid="geo-search">検索</Button>
           </form>
-          {geo.length > 0 && <ul className="space-y-1">{geo.map((g) => <li key={`${g.lat},${g.lon}`}><button className="w-full text-left px-3 py-2 rounded-[var(--radius-md)] hover:bg-fill text-sm" onClick={() => pick(g)} data-testid="geo-result">{g.name}</button></li>)}</ul>}
+          {geo.length > 0 && <ul className="space-y-1" aria-label="検索結果">{geo.map((g) => <li key={`${g.lat},${g.lon}`}><button type="button" className="focus-ring w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] hover:bg-fill text-sm" onClick={() => pick(g)} data-testid="geo-result">{g.name}</button></li>)}</ul>}
           <p className="text-xs text-label-2">気圧の判定基準: 3時間で2.5/4.0 hPa、6時間で4.0/6.0 hPa、期間内の幅5.0/8.0 hPa（注意/強い変化）。</p>
         </Card>
       </Section>

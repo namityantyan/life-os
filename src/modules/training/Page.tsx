@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, useNavigate, useLocation, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { PageHeader, Card, Section, Button, Badge, Input, Select, Field, Segmented, EmptyState, PageSkeleton, Stagger, Item, IconButton, Modal, useToast, cx } from "@/components/ui";
+import { PageHeader, Card, Section, Button, Badge, Input, Select, Field, Segmented, EmptyState, ErrorBanner, PageSkeleton, Stagger, Item, IconButton, Modal, Table, Th, Td, trCls, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDate, fmtDateTime, fmtNum } from "@/lib/api";
 import {
   CATALOG, PARTS, EQUIPMENTS, EQUIPMENT_LABELS, UNIT_LABELS, getExercise, legacyKeysFor, searchCatalog, unitFor,
@@ -73,7 +73,7 @@ function LogTab() {
   };
 
   if (loading && !data) return <PageSkeleton cards={3} />;
-  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  if (!data) return <div><ErrorBanner message={error} onRetry={() => reload()} testId="training-error" /><EmptyState title="記録を読み込めませんでした" /></div>;
   const session = data.session;
 
   if (!session) {
@@ -126,7 +126,7 @@ function ActiveSession({ session, sets, onChange, onFinish }: { session: Trainin
   const chooseRest = (v: 60 | 90 | 120) => { setRestSec(v); try { localStorage.setItem("training:rest", String(v)); } catch { /* ignore */ } };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <div className="grid gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="space-y-5 min-w-0">
         <Card>
           <div className="flex items-center justify-between gap-3">
@@ -156,7 +156,7 @@ function ActiveSession({ session, sets, onChange, onFinish }: { session: Trainin
               {grouped.map(([key, arr]) => (
                 <Card key={key} padded={false} className="overflow-hidden">
                   <div className="px-5 pt-4 pb-2 flex items-center justify-between">
-                    <button className="font-semibold tracking-tight text-left hover:text-accent" onClick={() => setSelected(getExercise(key) ?? null)}>{getExercise(key)?.name ?? key}</button>
+                    <button type="button" className="focus-ring rounded-[var(--radius-sm)] font-semibold tracking-tight text-left hover:text-accent" onClick={() => setSelected(getExercise(key) ?? null)}>{getExercise(key)?.name ?? key}</button>
                     <span className="text-xs text-label-2">{arr.length}セット</span>
                   </div>
                   <AnimatePresence initial={false}>
@@ -167,7 +167,7 @@ function ActiveSession({ session, sets, onChange, onFinish }: { session: Trainin
                           <span className="font-medium tabular">{describeSet(s)}</span>
                           {s.memo && <span className="text-xs text-label-2 truncate">{s.memo}</span>}
                           <span className="ml-auto text-xs text-label-3 tabular">{fmtDateTime(s.created_at).split(" ")[1]}</span>
-                          <IconButton label="削除" onClick={() => delSet(s.id)} className="size-7 text-xs">✕</IconButton>
+                          <IconButton label={`セット${i + 1}（${describeSet(s)}）を削除`} className="text-red hover:text-red" onClick={() => delSet(s.id)}>✕</IconButton>
                         </div>
                       </motion.div>
                     ))}
@@ -197,7 +197,7 @@ function ExercisePicker({ selected, onSelect, recentKeys, part }: { selected: Ca
     <Card className="space-y-3">
       {recentKeys.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {recentKeys.map((k) => { const e = getExercise(k); if (!e) return null; return <button key={k} onClick={() => pick(e)} className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium", selected?.key === k ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")}>{e.name}</button>; })}
+          {recentKeys.map((k) => { const e = getExercise(k); if (!e) return null; return <button key={k} type="button" aria-pressed={selected?.key === k} onClick={() => pick(e)} className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium", selected?.key === k ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")}>{e.name}</button>; })}
         </div>
       )}
       <div ref={ref} className="relative">
@@ -207,7 +207,7 @@ function ExercisePicker({ selected, onSelect, recentKeys, part }: { selected: Ca
             <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.15 }} className="absolute z-20 left-0 right-0 mt-2 bg-elevated rounded-[var(--radius-lg)] shadow-[var(--shadow-pop)] overflow-hidden max-h-80 overflow-y-auto" data-testid="exercise-results">
               {results.length === 0 && <div className="px-4 py-3 text-sm text-label-2">該当する種目がありません</div>}
               {results.map((e) => (
-                <button key={e.key} onClick={() => pick(e)} className="w-full text-left px-4 py-2.5 hover:bg-fill flex items-center gap-3" data-testid={`exercise-option-${e.key}`}>
+                <button key={e.key} type="button" onClick={() => pick(e)} className="focus-ring w-full text-left px-4 py-2.5 hover:bg-fill flex items-center gap-3" data-testid={`exercise-option-${e.key}`}>
                   <span className="font-medium">{e.name}</span>
                   <span className="text-xs text-label-2">{e.part} ・ {EQUIPMENT_LABELS[e.equipment]}</span>
                   <span className="ml-auto text-xs text-label-3">{UNIT_LABELS[unitFor(e)]}</span>
@@ -281,7 +281,7 @@ function RestTimer({ seconds, startedAt, onChoose, onStop }: { seconds: 60 | 90 
   const progress = startedAt == null ? 0 : Math.min(1, elapsed / seconds);
   const R = 54, C = 2 * Math.PI * R;
   return (
-    <Card as="section" className="flex flex-col items-center gap-4" >
+    <Card as="section" className="flex flex-col items-center gap-4">
       <div className="w-full flex items-center justify-between"><span className="text-sm font-semibold tracking-tight">休憩</span>
         <Segmented<"60" | "90" | "120"> value={String(seconds) as "60" | "90" | "120"} onChange={(v) => onChoose(Number(v) as 60 | 90 | 120)} options={[{ value: "60", label: "60秒" }, { value: "90", label: "90秒" }, { value: "120", label: "120秒" }]} />
       </div>
@@ -293,7 +293,7 @@ function RestTimer({ seconds, startedAt, onChoose, onStop }: { seconds: 60 | 90 
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <motion.div key={done ? "done" : "n"} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className={cx("text-3xl font-semibold tabular tracking-tight", done && "text-green")}>
-            {startedAt == null ? `${seconds}` : done ? "OK" : Math.ceil(remain)}
+            {startedAt == null ? `${seconds}` : done ? "終了" : Math.ceil(remain)}
           </motion.div>
           <div className="text-xs text-label-2">{startedAt == null ? "記録後に開始" : done ? "次のセットへ" : "秒"}</div>
         </div>
@@ -308,15 +308,15 @@ function HistoryTab() {
   const { data, loading, error, reload } = useApi<{ items: TrainingSession[] }>("/training/sessions?limit=100");
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={4} />;
-  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  if (!data) return <div><ErrorBanner message={error} onRetry={() => reload()} testId="training-error" /><EmptyState title="履歴を読み込めませんでした" /></div>;
   const items = data.items;
   if (items.length === 0) return <EmptyState title="履歴がありません" hint="記録タブからセッションを開始すると、ここに並びます。" />;
   return (
     <Section title="セッション">
-      <Stagger className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <Stagger className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
         {items.map((s) => (
-          <Item key={s.id}>
-            <Card onClick={() => nav(`/training/history/${s.id}`)} className="h-full" >
+          <Item key={s.id} className="min-w-0">
+            <Card onClick={() => nav(`/training/history/${s.id}`)} className="h-full">
               <div className="flex items-center justify-between" data-testid="session-row" data-session-id={s.id}>
                 <div className="flex items-center gap-2"><span className="text-lg font-semibold tracking-tight">{s.part}</span>{!s.ended_at && <Badge tone="accent">進行中</Badge>}</div>
                 <span className="text-sm text-label-2 tabular">{fmtDate(s.started_at)}</span>
@@ -344,7 +344,7 @@ function SessionDetail() {
   const remove = async () => { setDeleting(true); try { await api.del(`/training/sessions/${session.id}`); toast("削除しました"); nav("/training/history"); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); setDeleting(false); } };
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => nav("/training/history")}>← 履歴</Button></div>
+      <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => nav("/training/history")}>‹ 履歴へ戻る</Button></div>
       <Card>
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div><div className="flex items-center gap-2"><span className="text-2xl font-semibold tracking-tight" data-testid="detail-part">{session.part}</span>{!session.ended_at && <Badge tone="accent">進行中</Badge>}</div>
@@ -358,7 +358,7 @@ function SessionDetail() {
             <Item key={key}>
               <Card padded={false}>
                 <div className="px-5 pt-4 pb-2 flex items-center justify-between">
-                  <button className="font-semibold tracking-tight hover:text-accent text-left" onClick={() => nav(`/training/exercises/${key}`)} data-testid="detail-exercise">{getExercise(key)?.name ?? key}</button>
+                  <button type="button" className="focus-ring rounded-[var(--radius-sm)] font-semibold tracking-tight hover:text-accent text-left" onClick={() => nav(`/training/exercises/${key}`)} aria-label={`${getExercise(key)?.name ?? key}の履歴を開く`} data-testid="detail-exercise">{getExercise(key)?.name ?? key}</button>
                   <span className="text-xs text-label-2">{arr.length}セット</span>
                 </div>
                 {arr.map((s, i) => (
@@ -385,11 +385,11 @@ function ExerciseHistory() {
   const nav = useNavigate();
   const { data, loading, error } = useApi<{ entry: CatalogEntry; sets: (TrainingSet & { started_at: string })[]; best: TrainingSet | null; est_1rm: { value: number; reference: boolean } | null }>(key ? `/training/exercises/${key}/history` : null);
   if (loading && !data) return <PageSkeleton cards={2} />;
-  if (!data) return <EmptyState title="種目が見つかりません" hint={error ?? undefined} action={<Button onClick={() => nav("/training/records")}>戻る</Button>} />;
+  if (!data) return <EmptyState title="種目が見つかりません" hint={error ?? undefined} action={<Button onClick={() => nav("/training/records")}>重量・1RMへ戻る</Button>} />;
   const bySession = new Map<string, (TrainingSet & { started_at: string })[]>(); for (const s of data.sets) { const a = bySession.get(s.session_id) ?? []; a.push(s); bySession.set(s.session_id, a); }
   return (
     <div className="space-y-5">
-      <Button variant="ghost" size="sm" onClick={() => nav(-1)}>← 戻る</Button>
+      <Button variant="ghost" size="sm" onClick={() => nav(-1)}>‹ 戻る</Button>
       <Card>
         <div className="text-2xl font-semibold tracking-tight">{data.entry.name}</div>
         <div className="text-sm text-label-2 mt-1">{data.entry.english_name} ・ {data.entry.part} ・ {EQUIPMENT_LABELS[data.entry.equipment]} ・ {UNIT_LABELS[unitFor(data.entry)]}</div>
@@ -426,16 +426,16 @@ function CatalogTab() {
         </div>
         <div className="flex flex-wrap gap-2">
           {(["", ...PARTS] as (Part | "")[]).map((p) => (
-            <button key={p || "all"} onClick={() => setPart(p)} className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium", part === p ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")} data-testid={`catalog-part-${p || "all"}`}>{p || "すべて"}</button>
+            <button key={p || "all"} type="button" aria-pressed={part === p} onClick={() => setPart(p)} className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium", part === p ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")} data-testid={`catalog-part-${p || "all"}`}>{p || "すべて"}</button>
           ))}
-          <span className="ml-auto self-center text-xs text-label-2 tabular">{items.length} / {CATALOG.length}種目</span>
+          <span className="ml-auto self-center text-xs text-label-2 tabular" aria-live="polite">{items.length} / {CATALOG.length}種目</span>
         </div>
       </Card>
       {items.length === 0 ? <EmptyState title="該当する種目がありません" /> : (
-        <Stagger className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <Stagger className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
           {items.map((e) => { const legacy = legacyKeysFor(e.key); return (
-            <Item key={e.key}>
-              <Card className="h-full" >
+            <Item key={e.key} className="min-w-0">
+              <Card className="h-full min-w-0">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0"><div className="font-semibold tracking-tight truncate" data-testid="catalog-item">{e.name}</div><div className="text-xs text-label-2 truncate">{e.english_name}</div></div>
                   <Badge tone="neutral">{UNIT_LABELS[unitFor(e)]}</Badge>
@@ -443,7 +443,7 @@ function CatalogTab() {
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   <Badge tone="accent">{e.part}</Badge>{e.secondary_parts.map((p) => <Badge key={p}>{p}</Badge>)}<Badge>{EQUIPMENT_LABELS[e.equipment]}</Badge>
                 </div>
-                <div className="mt-3 text-xs text-label-2 tabular">目安 {e.rep_min}〜{e.rep_max}回 ・ 増量 {e.increment}kg{e.aliases.length > 0 && <> ・ 別名 {e.aliases.join("、")}</>}</div>
+                <div className="mt-3 text-xs text-label-2 tabular break-words">目安 {e.rep_min}〜{e.rep_max}回 ・ 増量 {e.increment}kg{e.aliases.length > 0 && <> ・ 別名 {e.aliases.join("、")}</>}</div>
                 {legacy.length > 0 && <div className="mt-1 text-xs text-orange">重複統合：旧 {legacy.join("、")} をこの種目に統合</div>}
               </Card>
             </Item>
@@ -459,29 +459,29 @@ function RecordsTab() {
   const { data, loading, error, reload } = useApi<{ items: ExerciseRecord[] }>("/training/records");
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={2} />;
-  if (!data) return <EmptyState title="読み込めませんでした" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  if (!data) return <div><ErrorBanner message={error} onRetry={() => reload()} testId="training-error" /><EmptyState title="記録を読み込めませんでした" /></div>;
   const items = data.items;
   if (items.length === 0) return <EmptyState title="記録がありません" hint="セットを記録すると、種目ごとの最高重量と推定1RMが並びます。" />;
   return (
-    <Section title="種目別の最高記録" action={<span className="text-xs text-label-2">Epley式 重量×(1+回数÷30)。11回以上は参考値。自重・保持時間は「—」。</span>}>
-      <Card padded={false} className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-xs text-label-2 text-left"><th className="px-5 py-3 font-medium">種目</th><th className="px-3 py-3 font-medium text-right">最高重量</th><th className="px-3 py-3 font-medium text-right">回数</th><th className="px-3 py-3 font-medium text-right">日付</th><th className="px-5 py-3 font-medium text-right">推定1RM</th></tr></thead>
+    <Section title="種目別の最高記録" action={<span className="text-xs text-label-2 text-right">Epley式 重量×(1+回数÷30)。11回以上は参考値。自重・保持時間は「—」。</span>}>
+      <Card padded={false}>
+        <Table>
+          <thead><tr><Th className="pl-5">種目</Th><Th align="right">最高重量</Th><Th align="right">回数</Th><Th align="right">日付</Th><Th align="right" className="pr-5">推定1RM</Th></tr></thead>
           <tbody>
             {items.map((r, i) => {
               const weighted = r.unit === "total" || r.unit === "per_hand" || r.unit === "plate";
               return (
-                <motion.tr key={r.exercise_key} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 20) * 0.03 }} className="border-t border-separator hover:bg-fill/50 cursor-pointer" onClick={() => nav(`/training/exercises/${r.exercise_key}`)} data-testid={`record-row-${r.exercise_key}`}>
-                  <td className="px-5 py-3"><div className="font-medium">{r.name}</div><div className="text-xs text-label-2">{r.unit ? UNIT_LABELS[r.unit] : "単位不明"} ・ {r.set_count}セット</div></td>
-                  <td className="px-3 py-3 text-right tabular font-medium" data-testid="record-weight">{weighted ? fmtWeight(r.best?.weight) : "—"}</td>
-                  <td className="px-3 py-3 text-right tabular">{r.unit === "time" ? `${r.best?.duration_sec ?? "—"}秒` : `${r.best?.reps ?? "—"}回`}</td>
-                  <td className="px-3 py-3 text-right tabular text-label-2">{fmtDate(r.best?.created_at)}</td>
-                  <td className="px-5 py-3 text-right tabular" data-testid="record-1rm">{r.est_1rm ? <span className="inline-flex items-center gap-1.5 font-semibold">{fmtWeight(r.est_1rm.value)}{r.est_1rm.reference && <Badge tone="orange">参考値</Badge>}</span> : <span className="text-label-3">—</span>}</td>
+                <motion.tr key={r.exercise_key} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 20) * 0.03 }} className={cx(trCls, "hover:bg-fill/50 cursor-pointer focus-within:bg-fill/50")} onClick={() => nav(`/training/exercises/${r.exercise_key}`)} data-testid={`record-row-${r.exercise_key}`}>
+                  <Td className="pl-5"><button type="button" className="focus-ring rounded-[var(--radius-sm)] text-left font-medium" onClick={(e) => { e.stopPropagation(); nav(`/training/exercises/${r.exercise_key}`); }} aria-label={`${r.name}の履歴を開く`}>{r.name}</button><div className="text-xs text-label-2">{r.unit ? UNIT_LABELS[r.unit] : "単位不明"} ・ {r.set_count}セット</div></Td>
+                  <Td align="right" className="font-medium" data-testid="record-weight">{weighted ? fmtWeight(r.best?.weight) : "—"}</Td>
+                  <Td align="right">{r.unit === "time" ? `${r.best?.duration_sec ?? "—"}秒` : `${r.best?.reps ?? "—"}回`}</Td>
+                  <Td align="right" className="text-label-2">{fmtDate(r.best?.created_at)}</Td>
+                  <Td align="right" className="pr-5" data-testid="record-1rm">{r.est_1rm ? <span className="inline-flex items-center gap-1.5 font-semibold">{fmtWeight(r.est_1rm.value)}{r.est_1rm.reference && <Badge tone="orange">参考値</Badge>}</span> : <span className="text-label-3">—</span>}</Td>
                 </motion.tr>
               );
             })}
           </tbody>
-        </table>
+        </Table>
       </Card>
     </Section>
   );

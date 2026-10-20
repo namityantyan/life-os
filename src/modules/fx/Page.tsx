@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { PageHeader, Card, Section, Badge, Button, Segmented, Select, Field, Input, Textarea, Toggle, Stat, PageSkeleton, EmptyState, Stagger, Item, useToast, cx } from "@/components/ui";
+import { PageHeader, Card, Section, Badge, Button, Segmented, Select, Field, Input, Textarea, Toggle, Stat, PageSkeleton, EmptyState, ErrorBanner, Stagger, Item, Table, Th, Td, trCls, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDateTime, fmtNum } from "@/lib/api";
 import { PAIRS, RULES, RULE_KEYS, pipSize, type Pair, type Rule, type Timeframe, type PairsResponse, type ChartResponse, type TradeRow, type FxSettings, type StatusResponse, type PerformanceResponse, type SetupMark, type ConnectorPosition } from "@shared/fx";
 import ChartView from "./ChartView";
@@ -61,9 +61,10 @@ function PairsTab() {
   const { data, loading, error, reload } = useApi<PairsResponse>("/fx/pairs", { poll: 5000 });
   const nav = useNavigate();
   if (loading && !data) return <PageSkeleton cards={7} />;
-  if (!data) return <EmptyState title="通貨ペアを取得できません" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  if (!data) return <div><ErrorBanner message={error} onRetry={() => reload()} testId="fx-error" /><EmptyState title="通貨ペアを取得できません" /></div>;
   return (
     <div className="space-y-4">
+      {error && <ErrorBanner message={error} onRetry={() => reload()} className="mb-0" testId="fx-error" />}
       {!data.connector_online && (
         <Card className="text-sm text-label-2" data-testid="fx-offline-note">
           Windowsからの受信が確認できません（最終受信 {data.connector_last_seen ? fmtDateTime(data.connector_last_seen) : "なし"}）。マークは「更新待ち」になります。Windowsの起動・スリープ、MT5のログイン、コネクター、通信を確認してください。
@@ -76,10 +77,10 @@ function PairsTab() {
             <Item key={p.pair}>
               <Card className="h-full"><div className="space-y-3" data-testid={`fx-pair-${p.pair.replace("/", "")}`}>
                 <div className="flex items-baseline justify-between">
-                  <button className="text-xl font-semibold tracking-tight text-accent focus-ring rounded" onClick={() => nav(`/fx/chart?pair=${encodeURIComponent(p.pair)}`)} data-testid={`fx-pair-link-${p.pair.replace("/", "")}`}>{p.pair}</button>
-                  <div className={cx("text-sm tabular", p.quote_stale ? "text-label-3" : "text-label-2")}>
+                  <button className="text-xl font-semibold tracking-tight text-accent focus-ring rounded-[var(--radius-sm)] -mx-1 px-1" onClick={() => nav(`/fx/chart?pair=${encodeURIComponent(p.pair)}`)} aria-label={`${p.pair}のチャートを開く`} data-testid={`fx-pair-link-${p.pair.replace("/", "")}`}>{p.pair}</button>
+                  <div className={cx("text-sm tabular text-right", p.quote_stale ? "text-label-3" : "text-label-2")}>
                     {p.quote ? `${p.quote.bid.toFixed(digits)} / ${p.quote.ask.toFixed(digits)}` : "未取得"}
-                    {p.quote && p.quote_stale && <span className="ml-1 text-xs">(古い)</span>}
+                    {p.quote && p.quote_stale && <Badge tone="orange" className="ml-1.5">古い</Badge>}
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -146,23 +147,23 @@ function ChartTab() {
         <Segmented value={span} onChange={(v) => { setSpan(v); }} options={SPANS.map((s) => ({ value: s.value, label: s.label }))} />
         <Segmented value={tf} onChange={setTf} options={(["M5", "H1", "H4", "D1"] as Timeframe[]).map((t) => ({ value: t, label: t }))} />
         <div className="flex-1" />
-        <Button size="sm" onClick={() => shift(-1)} aria-label="前へ">‹ 前</Button>
-        <Button size="sm" onClick={() => shift(1)} disabled={to == null} aria-label="次へ">次 ›</Button>
-        <Button size="sm" variant={fitAll ? "tinted" : "secondary"} onClick={() => setFitAll((v) => !v)} data-testid="fx-fit-all">全水準表示</Button>
+        <Button size="sm" onClick={() => shift(-1)} aria-label="前の期間へ">‹ 前</Button>
+        <Button size="sm" onClick={() => shift(1)} disabled={to == null} aria-label="次の期間へ">次 ›</Button>
+        <Button size="sm" variant={fitAll ? "tinted" : "secondary"} aria-pressed={fitAll} onClick={() => setFitAll((v) => !v)} data-testid="fx-fit-all">全水準表示</Button>
         <Button size="sm" variant="ghost" onClick={() => reload(true)} loading={loading && Boolean(data)}>更新</Button>
       </div>
       <Card padded={false} className="overflow-hidden">
         <div className="aspect-video w-full relative" data-testid="fx-chart">
           {data ? (
             <ChartView data={data} hidden={hidden} fitAll={fitAll} onReachStart={() => { if (data.stored_range.from != null && data.from > data.stored_range.from) shift(-1); }} onShiftWheel={(d) => shift(d)} />
-          ) : error ? <EmptyState title="チャートを取得できません" hint={error} /> : <div className="absolute inset-0 skeleton" />}
+          ) : error ? <div className="absolute inset-0 flex items-center justify-center p-5"><EmptyState title="チャートを取得できません" hint={error} action={<Button size="sm" onClick={() => reload()}>再読み込み</Button>} /></div> : <div className="absolute inset-0 skeleton" aria-busy="true" aria-label="読み込み中" />}
         </div>
       </Card>
       {data && (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
             {toggles.map((t) => (
-              <button key={t.key} onClick={() => setHidden((h) => ({ ...h, [t.key]: !h[t.key] }))} className={cx("focus-ring rounded-full px-3 py-1 text-xs font-medium transition-colors", hidden[t.key] ? "bg-transparent text-label-3 line-through" : "bg-fill text-label")}>{t.label}</button>
+              <button key={t.key} type="button" aria-pressed={!hidden[t.key]} onClick={() => setHidden((h) => ({ ...h, [t.key]: !h[t.key] }))} className={cx("focus-ring pressable rounded-full px-3 h-8 text-sm font-medium transition-colors", hidden[t.key] ? "bg-transparent text-label-3 line-through hover:bg-fill" : "bg-fill text-label hover:bg-fill-strong")}>{t.label}</button>
             ))}
           </div>
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-label-2 tabular">
@@ -190,7 +191,7 @@ type PositionsRes = { connector_online: boolean; last_seen: string | null; equit
 function PositionsTab() {
   const { data, loading, error, reload } = useApi<PositionsRes>("/fx/positions", { poll: 5000 });
   if (loading && !data) return <PageSkeleton cards={3} />;
-  if (!data) return <EmptyState title="保有を取得できません" hint={error ?? undefined} action={<Button onClick={() => reload()}>再読み込み</Button>} />;
+  if (!data) return <div><ErrorBanner message={error} onRetry={() => reload()} testId="fx-error" /><EmptyState title="保有を取得できません" /></div>;
   return (
     <div className="space-y-6">
       <Card className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -211,26 +212,25 @@ function PositionsTab() {
   );
 }
 
+const TRADE_COLS: { label: string; align?: "left" | "right" }[] = [{ label: "ルール" }, { label: "通貨" }, { label: "方向" }, { label: "数量", align: "right" }, { label: "建値", align: "right" }, { label: "決済", align: "right" }, { label: "SL", align: "right" }, { label: "TP", align: "right" }, { label: "損益 USD", align: "right" }, { label: "R", align: "right" }, { label: "開始" }, { label: "終了" }];
 function TradeTable({ rows }: { rows: TradeRow[] }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm" data-testid="fx-trade-table">
-        <thead className="text-xs text-label-2"><tr>{["ルール", "通貨", "方向", "数量", "建値", "決済", "SL", "TP", "損益 USD", "R", "開始", "終了"].map((h) => <th key={h} className="text-left font-medium px-4 py-2 whitespace-nowrap">{h}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((t) => { const d = pipSize(t.pair) === 0.01 ? 3 : 5; const f = (v: number | null) => (v == null ? "—" : v.toFixed(d)); return (
-            <tr key={t.id} className="border-t border-separator tabular">
-              <td className="px-4 py-2 whitespace-nowrap">{RULES[t.rule] ?? t.rule}</td><td className="px-4 py-2">{t.pair}</td>
-              <td className={cx("px-4 py-2 font-medium", t.side === "BUY" ? "text-accent" : "text-red")}>{t.side}</td>
-              <td className="px-4 py-2">{t.lots ?? "—"}</td><td className="px-4 py-2">{f(t.open_price)}</td><td className="px-4 py-2">{f(t.close_price)}</td>
-              <td className="px-4 py-2">{f(t.sl)}</td><td className="px-4 py-2">{f(t.tp)}</td>
-              <td className={cx("px-4 py-2", t.pnl_usd != null && (t.pnl_usd >= 0 ? "text-green" : "text-red"))}>{t.pnl_usd != null ? fmtNum(t.pnl_usd, 2) : "—"}</td>
-              <td className="px-4 py-2">{t.r_multiple != null ? t.r_multiple.toFixed(2) : "—"}</td>
-              <td className="px-4 py-2 whitespace-nowrap">{fmtDateTime(t.open_at)}</td><td className="px-4 py-2 whitespace-nowrap">{fmtDateTime(t.close_at)}</td>
-            </tr>
-          ); })}
-        </tbody>
-      </table>
-    </div>
+    <Table testId="fx-trade-table">
+      <thead><tr>{TRADE_COLS.map((c) => <Th key={c.label} align={c.align}>{c.label}</Th>)}</tr></thead>
+      <tbody>
+        {rows.map((t) => { const d = pipSize(t.pair) === 0.01 ? 3 : 5; const f = (v: number | null) => (v == null ? "—" : v.toFixed(d)); return (
+          <tr key={t.id} className={trCls}>
+            <Td>{RULES[t.rule] ?? t.rule}</Td><Td>{t.pair}</Td>
+            <Td className={cx("font-medium", t.side === "BUY" ? "text-accent" : "text-red")}>{t.side === "BUY" ? "買 BUY" : "売 SELL"}</Td>
+            <Td align="right">{t.lots ?? "—"}</Td><Td align="right">{f(t.open_price)}</Td><Td align="right">{f(t.close_price)}</Td>
+            <Td align="right">{f(t.sl)}</Td><Td align="right">{f(t.tp)}</Td>
+            <Td align="right" className={cx(t.pnl_usd != null && (t.pnl_usd >= 0 ? "text-green" : "text-red"))}>{t.pnl_usd != null ? `${t.pnl_usd > 0 ? "+" : ""}${fmtNum(t.pnl_usd, 2)}` : "—"}</Td>
+            <Td align="right">{t.r_multiple != null ? `${t.r_multiple > 0 ? "+" : ""}${t.r_multiple.toFixed(2)}` : "—"}</Td>
+            <Td>{fmtDateTime(t.open_at)}</Td><Td>{fmtDateTime(t.close_at)}</Td>
+          </tr>
+        ); })}
+      </tbody>
+    </Table>
   );
 }
 
@@ -240,7 +240,7 @@ function TradesTab() {
   const trades = useApi<{ trades: TradeRow[] }>(`/fx/trades${status === "all" ? "" : `?status=${status}`}`, { poll: 30_000 });
   const perf = useApi<PerformanceResponse>("/fx/performance", { poll: 60_000 });
   if (!trades.data && trades.loading) return <PageSkeleton cards={3} />;
-  if (!trades.data) return <EmptyState title="取引履歴を取得できません" hint={trades.error ?? undefined} action={<Button onClick={() => trades.reload()}>再読み込み</Button>} />;
+  if (!trades.data) return <div><ErrorBanner message={trades.error} onRetry={() => trades.reload()} testId="fx-error" /><EmptyState title="取引履歴を取得できません" /></div>;
   return (
     <div className="space-y-6">
       <Section title="実取引の成績（現行3ルール）">
@@ -253,16 +253,16 @@ function TradesTab() {
                 <Stat label="確定件数" value={r.trades} />
                 <Stat label="勝率" value={r.trades ? `${Math.round((r.wins / r.trades) * 100)}%` : "—"} />
                 <Stat label="合計R" value={r.trades ? `${r.r_total >= 0 ? "+" : ""}${r.r_total.toFixed(2)}` : "—"} tone={r.trades ? (r.r_total >= 0 ? "green" : "red") : undefined} />
-                <Stat label="損益 USD" value={r.trades ? fmtNum(r.pnl_usd, 2) : "—"} />
+                <Stat label="損益 USD" value={r.trades ? `${r.pnl_usd > 0 ? "+" : ""}${fmtNum(r.pnl_usd, 2)}` : "—"} />
               </div>
             </Card>
           ))}
         </div>
         {perf.data && perf.data.by_month.length > 0 && (
-          <Card padded={false}><div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="text-xs text-label-2"><tr>{["月", "ルール", "件数", "合計R", "損益 USD"].map((h) => <th key={h} className="text-left font-medium px-4 py-2">{h}</th>)}</tr></thead>
-            <tbody>{perf.data.by_month.map((m) => <tr key={`${m.month}${m.rule}`} className="border-t border-separator tabular"><td className="px-4 py-2">{m.month}</td><td className="px-4 py-2">{RULES[m.rule]}</td><td className="px-4 py-2">{m.trades}</td><td className="px-4 py-2">{m.r_total.toFixed(2)}</td><td className="px-4 py-2">{fmtNum(m.pnl_usd, 2)}</td></tr>)}</tbody>
-          </table></div></Card>
+          <Card padded={false}><Table testId="fx-month-table">
+            <thead><tr><Th>月</Th><Th>ルール</Th><Th align="right">件数</Th><Th align="right">合計R</Th><Th align="right">損益 USD</Th></tr></thead>
+            <tbody>{perf.data.by_month.map((m) => <tr key={`${m.month}${m.rule}`} className={trCls}><Td>{m.month}</Td><Td>{RULES[m.rule]}</Td><Td align="right">{m.trades}</Td><Td align="right" className={m.r_total >= 0 ? "text-green" : "text-red"}>{`${m.r_total > 0 ? "+" : ""}${m.r_total.toFixed(2)}`}</Td><Td align="right">{`${m.pnl_usd > 0 ? "+" : ""}${fmtNum(m.pnl_usd, 2)}`}</Td></tr>)}</tbody>
+          </Table></Card>
         )}
       </Section>
       <Section title="取引履歴" action={<Segmented value={status} onChange={setStatus} options={[{ value: "all", label: "すべて" }, { value: "open", label: "保有中" }, { value: "closed", label: "決済済み" }]} />}>
@@ -281,7 +281,7 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
   const [form, setForm] = useState<FxSettings | null>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (settings.data && !form) setForm(settings.data); }, [settings.data, form]);
-  if (!form) return settings.error ? <EmptyState title="設定を取得できません" hint={settings.error} action={<Button onClick={() => settings.reload()}>再読み込み</Button>} /> : <PageSkeleton cards={2} />;
+  if (!form) return settings.error ? <div><ErrorBanner message={settings.error} onRetry={() => settings.reload()} testId="fx-error" /><EmptyState title="設定を取得できません" /></div> : <PageSkeleton cards={2} />;
   const save = async () => {
     setSaving(true);
     try { const saved = await api.put<FxSettings>("/fx/settings", form); setForm(saved); settings.setData(saved); toast("保存しました。共通lotはWindowsの次回同期後の新規取引から反映されます", "success"); reloadStatus(); }
@@ -289,7 +289,7 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
   };
   const num = (v: string, fallback: number) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
       <div className="space-y-6">
         <Section title="自動売買の許可">
           <Card className="space-y-4">
@@ -332,7 +332,7 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
                 <Row k="端末の停止理由" v={status.connector_stop_reasons.length ? status.connector_stop_reasons.join("、") : "なし"} />
                 <Row k="接続トークン" v={status.token_configured ? "設定済み" : <span className="text-red">未設定（FX_CONNECTOR_TOKEN）</span>} />
               </>
-            ) : "—"}
+            ) : <span className="text-label-3">—</span>}
           </Card>
         </Section>
         <Section title="かんたん更新・インストール">
@@ -344,11 +344,11 @@ function SettingsTab({ status, reloadStatus }: { status: StatusResponse | null; 
                   {Object.entries(install.data.endpoints).map(([k, v]) => <div key={k} className="flex gap-2"><span className="text-label-3 w-20 shrink-0">{k}</span><code className="font-mono break-all">{v}</code></div>)}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {install.data.downloads.map((d) => <Button key={d.label} size="sm" disabled={!d.url} title={d.note}>{d.label}</Button>)}
+                  {install.data.downloads.map((d) => d.url ? <a key={d.label} href={d.url} className="pressable focus-ring inline-flex items-center h-8 px-3 rounded-[var(--radius-md)] bg-fill text-label text-sm font-medium whitespace-nowrap hover:bg-fill-strong" title={d.note}>{d.label}</a> : <Button key={d.label} size="sm" disabled title={d.note}>{d.label}</Button>)}
                 </div>
                 <div className="text-xs text-label-3">{install.data.downloads.map((d) => d.note).join(" / ")}</div>
               </>
-            ) : <div className="skeleton h-24" />}
+            ) : install.error ? <ErrorBanner message={install.error} onRetry={() => install.reload()} className="mb-0" /> : <div className="skeleton h-24" aria-busy="true" aria-label="読み込み中" />}
           </Card>
         </Section>
       </div>

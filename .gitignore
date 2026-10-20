@@ -9,3 +9,4 @@ playwright-report
 worker-configuration.d.ts
 .DS_Store
 test-results*
+*.tsbuildinfo

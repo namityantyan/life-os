@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { api, useApi, fmtDateTime } from "@/lib/api";
-import { Badge, Button, EmptyState, Field, Input, Item, Modal, PageHeader, PageSkeleton, Segmented, Select, Stagger, Textarea, useToast } from "@/components/ui";
+import { Badge, Button, EmptyState, ErrorBanner, Field, Input, Item, Modal, PageHeader, PageSkeleton, Segmented, Select, Stagger, Textarea, useToast } from "@/components/ui";
 
 type Status = "open" | "in_progress" | "done";
 type Req = { id: string; title: string; detail: string | null; example: string | null; status: Status; created_at: string; updated_at: string };
@@ -40,10 +40,10 @@ export default function Page() {
       <PageHeader title="リクエスト" subtitle="Life OSへの要望を記録して、対応状況を管理します。登録だけで自動的に反映されることはありません。"
         actions={<Button variant="primary" onClick={() => setModal({ mode: "new" })} data-testid="request-add">追加</Button>} />
 
-      {error && !data && <div role="alert" data-testid="load-error" className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm text-red"><span>読み込めませんでした：{error}</span><Button size="sm" onClick={() => reload()}>再読み込み</Button></div>}
+      {error && !data && <ErrorBanner message={error} onRetry={() => reload()} testId="load-error" />}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Segmented value={filter} onChange={setFilter} options={[{ value: "all" as Filter, label: "すべて" }, ...STATUSES.map((s) => ({ value: s as Filter, label: STATUS_LABELS[s] }))]} />
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="タイトル・詳細を検索" aria-label="検索" className="w-56" data-testid="request-search" />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="タイトル・詳細を検索" aria-label="検索" className="w-full sm:w-56" data-testid="request-search" />
       </div>
 
       {error && !data ? null : items.length === 0 ? (
@@ -61,7 +61,7 @@ export default function Page() {
                   </button>
                   <div className="flex items-center justify-between gap-2 pt-1">
                     <span className="text-xs text-label-3 tabular whitespace-nowrap">{fmtDateTime(it.updated_at)}</span>
-                    <Select value={it.status} onChange={(e) => setStatus(it, e.target.value as Status)} className="w-28 h-8 text-sm" aria-label="状態" data-testid="request-status">
+                    <Select value={it.status} onChange={(e) => setStatus(it, e.target.value as Status)} className="w-28 h-9 text-sm" aria-label={`「${it.title}」の状態`} data-testid="request-status">
                       {STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
                     </Select>
                   </div>

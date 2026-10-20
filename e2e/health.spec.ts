@@ -68,7 +68,7 @@ test("pressure: 今しんどい creates a log (weather location set first)", asy
   await expect(page.getByTestId("pressure-card")).toBeVisible({ timeout: 30_000 });
   const before = await page.getByTestId("pressure-log-item").count();
   await page.getByTestId("pressure-log-now").click();
-  await expect(page.getByTestId("pressure-log-item")).toHaveCount(before + 1, { timeout: 20_000 });
+  await expect(page.getByTestId("pressure-log-item")).toHaveCount(before + 1, { timeout: 30_000 });
   // personal threshold is never claimed without enough data: status text is always present
   await expect(page.getByTestId("personal-status")).toContainText(/個人基準/);
 
@@ -88,7 +88,7 @@ test("health chat: sends a message and receives a reply (fallback allowed)", asy
   await expect(log).toContainText(msg);
   // the assistant bubble follows the user bubble
   await expect(log.locator(".bg-fill").last()).toBeVisible({ timeout: 30_000 });
-  await expect(log.locator(".bg-fill").last()).not.toHaveText("");
+  await expect(log.locator(".bg-fill").last()).not.toHaveText("", { timeout: 30_000 });
   const hist = await page.request.get("/api/health/chat/health");
   const j = await hist.json();
   expect(j.items.some((m: any) => m.role === "assistant")).toBeTruthy();

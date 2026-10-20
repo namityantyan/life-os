@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
-import { PageHeader, PageSkeleton, Card, Section, Stat, Badge, Button, Input, Select, Field, Segmented, Modal, EmptyState, Stagger, Item, ChatPanel, useToast, type ChatMsg } from "@/components/ui";
-import { api, useApi, fmtYen, fmtNum, todayJst } from "@/lib/api";
+import { PageHeader, PageSkeleton, Card, Section, Stat, Badge, Button, Input, Select, Field, Textarea, Toggle, Segmented, Modal, EmptyState, ErrorBanner, Stagger, Item, ChatPanel, ChartTip, useChartColors, useToast, type ChatMsg } from "@/components/ui";
+import { api, useApi, fmtYen, fmtNum, fmtDateTime, todayJst } from "@/lib/api";
 import type { AssetAccount, AssetOverview, BalancesResponse, AssetPlan, Allocation, AssetCategory, LatestBalance } from "@shared/assets";
 import { ASSET_CATEGORIES, ASSET_CATEGORY_LABELS } from "@shared/assets";
 
@@ -23,7 +23,7 @@ export default function Page() {
   const reloadAll = () => { accounts.reload(true); overview.reload(true); };
   useEffect(() => { const f = params.get("freee"); if (f) { toast(f === "connected" ? "freeeと接続しました" : "freeeの接続に失敗しました", f === "connected" ? "success" : "error"); setParams((p) => { p.delete("freee"); return p; }, { replace: true }); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (accounts.loading && !accounts.data) return <PageSkeleton />;
-  if (!accounts.data) return <div><PageHeader title="資産" /><EmptyState title="資産を取得できません" hint={accounts.error ?? overview.error ?? undefined} action={<Button onClick={reloadAll}>再読み込み</Button>} /></div>;
+  if (!accounts.data) return <div><PageHeader title="資産" /><ErrorBanner message={accounts.error ?? overview.error} onRetry={reloadAll} testId="assets-error" /><EmptyState title="資産を取得できません" /></div>;
   const accs = accounts.data.accounts;
   return (
     <div>
@@ -46,6 +46,7 @@ function OverviewTab({ overview, overviewError, onChanged }: { overview: AssetOv
   const [period, setPeriod] = useState<"3m" | "1y" | "all">("1y");
   const [importOpen, setImportOpen] = useState(false);
   const [csv, setCsv] = useState("");
+  const cc = useChartColors();
   const to = todayJst();
   const from = period === "all" ? "2000-01-01" : new Date(Date.parse(to) - (period === "3m" ? 92 : 365) * 86400e3).toISOString().slice(0, 10);
   const bal = useApi<BalancesResponse>(`/assets/balances?from=${from}&to=${to}&owner=${owner}&category=${category}`);
@@ -54,10 +55,11 @@ function OverviewTab({ overview, overviewError, onChanged }: { overview: AssetOv
     try { const r = await api.post<{ imported: number; errors: string[] }>("/assets/import", { csv }); toast(`${r.imported}件を取り込みました${r.errors.length ? `（エラー ${r.errors.length}件）` : ""}`, r.errors.length ? "error" : "success"); setImportOpen(false); setCsv(""); bal.reload(true); onChanged(); }
     catch (e: any) { toast(e.message, "error"); } finally { setImporting(false); }
   };
-  if (!overview) return overviewError ? <EmptyState title="概要を取得できません" hint={overviewError} action={<Button onClick={onChanged}>再読み込み</Button>} /> : <PageSkeleton cards={3} />;
+  if (!overview) return overviewError ? <div><ErrorBanner message={overviewError} onRetry={onChanged} testId="assets-error" /><EmptyState title="概要を取得できません" /></div> : <PageSkeleton cards={3} />;
   const rr = bal.data?.recorded_range;
   return (
     <div className="space-y-6">
+      {bal.error && <ErrorBanner message={bal.error} onRetry={() => bal.reload()} className="mb-0" />}
       <Card>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
           <Stat label="総資産（負債を除く）" value={overview.total == null ? "—" : fmtYen(overview.total)} hint={overview.as_of ? `最終記録 ${fmtD(overview.as_of)}${overview.stale_count ? `・古い口座 ${overview.stale_count}件` : ""}` : "記録がありません"} />
@@ -74,16 +76,16 @@ function OverviewTab({ overview, overviewError, onChanged }: { overview: AssetOv
         <Card>
           {bal.data && bal.data.series.length ? (
             <>
-              <div className="text-xs text-label-2 mb-2">記録のある範囲 {rr ? `${rr.from} 〜 ${rr.to}` : "—"}（指定期間 {from} 〜 {to}）。記録のない日は作成しません。</div>
+              <div className="text-xs text-label-2 mb-2 tabular">記録のある範囲 {rr ? `${rr.from} 〜 ${rr.to}` : "—"}（指定期間 {from} 〜 {to}）。記録のない日は作成しません。</div>
               <div className="h-64" data-testid="asset-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={bal.data.series} margin={{ left: 8, right: 8, top: 8, bottom: 0 }}>
-                    <defs><linearGradient id="assetFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0} /></linearGradient></defs>
-                    <CartesianGrid vertical={false} stroke="var(--separator)" />
-                    <XAxis dataKey="date" tickFormatter={fmtD} tick={{ fill: "var(--label-2)", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={32} />
-                    <YAxis tickFormatter={fmtMan} tick={{ fill: "var(--label-2)", fontSize: 11 }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip cursor={{ stroke: "var(--label-3)" }} content={({ active, payload }) => active && payload?.[0] ? <div className="glass rounded-[var(--radius-md)] px-3 py-2 text-sm shadow-[var(--shadow-pop)]"><div className="text-label-2 text-xs">{(payload[0].payload as any).date}{(payload[0].payload as any).carried ? "・一部持ち越し" : ""}</div><div className="tabular font-medium">{fmtYen(payload[0].value as number)}</div></div> : null} />
-                    <Area type="monotone" dataKey="total" stroke="var(--accent)" strokeWidth={2} fill="url(#assetFill)" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--bg-elevated)" }} isAnimationActive={false} />
+                    <defs><linearGradient id="assetFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={cc.accent} stopOpacity={0.25} /><stop offset="100%" stopColor={cc.accent} stopOpacity={0} /></linearGradient></defs>
+                    <CartesianGrid vertical={false} stroke={cc.separator} />
+                    <XAxis dataKey="date" tickFormatter={fmtD} tick={{ fill: cc.label2, fontSize: cc.tickFont }} axisLine={false} tickLine={false} minTickGap={32} />
+                    <YAxis tickFormatter={fmtMan} tick={{ fill: cc.label2, fontSize: cc.tickFont }} axisLine={false} tickLine={false} width={44} />
+                    <Tooltip cursor={{ stroke: cc.label3 }} content={({ active, payload }) => active && payload?.[0] ? <ChartTip label={`${fmtD((payload[0].payload as any).date)}${(payload[0].payload as any).carried ? "・一部持ち越し" : ""}`} value={fmtYen(payload[0].value as number)} /> : null} />
+                    <Area type="monotone" dataKey="total" stroke={cc.accent} strokeWidth={2} fill="url(#assetFill)" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: cc.elevated }} isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -105,7 +107,7 @@ function OverviewTab({ overview, overviewError, onChanged }: { overview: AssetOv
       </Section>
       <Modal open={importOpen} onClose={() => setImportOpen(false)} title="CSV取り込み" footer={<><Button onClick={() => setImportOpen(false)}>キャンセル</Button><Button variant="primary" onClick={doImport} disabled={!csv.trim()} loading={importing}>取り込む</Button></>}>
         <p className="text-sm text-label-2 mb-2">列: date,account,quantity,rate,jpy_value。口座名は登録済みの名前と一致させてください。空欄は不明として記録しません。</p>
-        <textarea className="focus-ring w-full h-40 p-3 rounded-[var(--radius-md)] bg-fill font-mono text-sm" value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"date,account,quantity,rate,jpy_value\n2026-10-01,メイン銀行,1500000,,"} />
+        <Field label="CSV"><Textarea className="h-40 font-mono text-sm" value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"date,account,quantity,rate,jpy_value\n2026-10-01,メイン銀行,1500000,,"} /></Field>
       </Modal>
     </div>
   );
@@ -115,7 +117,7 @@ function LatestCell({ a, l }: { a: AssetAccount; l: LatestBalance | null }) {
   return (
     <div className="text-right">
       <div className="tabular font-medium flex items-center justify-end gap-2">{l.stale && <Badge tone="orange">参考</Badge>}{l.jpy_value == null ? `${fmtNum(l.quantity, 4)} ${a.unit ?? a.currency}（円換算なし）` : fmtYen(l.jpy_value)}</div>
-      <div className="text-xs text-label-2">{a.currency !== "JPY" && l.quantity != null ? `${fmtNum(l.quantity, 4)} ${a.unit ?? a.currency}・` : ""}{l.recorded_on}{l.source === "freee" ? "・freee同期" : ""}</div>
+      <div className="text-xs text-label-2 tabular">{a.currency !== "JPY" && l.quantity != null ? `${fmtNum(l.quantity, 4)} ${a.unit ?? a.currency}・` : ""}{fmtD(l.recorded_on)} 記録{l.source === "freee" ? "・freee同期" : ""}</div>
     </div>
   );
 }
@@ -130,7 +132,9 @@ function EntryTab({ accounts, onSaved }: { accounts: AssetAccount[]; onSaved: ()
   const [saving, setSaving] = useState(false);
   const day = useApi<BalancesResponse>(`/assets/balances?from=${date}&to=${date}&owner=all&category=all`);
   const rowsForDay = useMemo(() => { const m: Record<string, BalancesResponse["rows"][number]> = {}; for (const r of day.data?.rows ?? []) if (!m[r.account_id] || r.source !== "freee") m[r.account_id] = r; return m; }, [day.data]);
-  useEffect(() => { const d: Record<string, Draft> = {}; for (const a of accounts) { const r = rowsForDay[a.id]; d[a.id] = { quantity: r && r.source !== "freee" && r.quantity != null ? String(r.quantity) : "", rate: r && r.source !== "freee" && r.rate != null ? String(r.rate) : "" }; } setDraft(d); }, [rowsForDay, accounts]);
+  // Initialise the draft from the day's stored rows, but never overwrite a value the user already typed (only fill empty fields).
+  useEffect(() => { setDraft((prev) => { const d: Record<string, Draft> = { ...prev }; for (const a of accounts) { const r = rowsForDay[a.id]; const stored = { quantity: r && r.source !== "freee" && r.quantity != null ? String(r.quantity) : "", rate: r && r.source !== "freee" && r.rate != null ? String(r.rate) : "" }; const cur = prev[a.id]; d[a.id] = { quantity: cur?.quantity ? cur.quantity : stored.quantity, rate: cur?.rate ? cur.rate : stored.rate }; } return d; }); }, [rowsForDay, accounts]);
+  useEffect(() => { setDraft({}); }, [date]);
   const freeeRow = (a: AssetAccount) => { const r = rowsForDay[a.id]; return a.source === "freee" && r?.source === "freee" ? r : null; };
   const rows = accounts.filter((a) => !manualOnly || !freeeRow(a));
   const copyPrevious = async () => {
@@ -155,7 +159,7 @@ function EntryTab({ accounts, onSaved }: { accounts: AssetAccount[]; onSaved: ()
         <div className="flex flex-wrap items-end gap-3">
           <Field label="記録日"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="entry-date" className="w-44" /></Field>
           <Button onClick={copyPrevious} data-testid="copy-previous">前回値をコピー（空欄のみ）</Button>
-          <label className="flex items-center gap-2 text-sm text-label-2"><input type="checkbox" checked={manualOnly} onChange={(e) => setManualOnly(e.target.checked)} />手入力だけ表示</label>
+          <label className="flex items-center gap-2 text-sm text-label-2 h-10"><Toggle checked={manualOnly} onChange={setManualOnly} label="手入力だけ表示" />手入力だけ表示</label>
           <div className="flex-1" />
           <Button variant="primary" onClick={save} loading={saving} data-testid="entry-save">保存</Button>
         </div>
@@ -220,9 +224,9 @@ function AccountsTab({ accounts, onChanged }: { accounts: AssetAccount[]; onChan
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="font-medium">{fs?.connected ? "接続済み" : "未接続"}{fs?.connected && fs.companies.length > 0 && <span className="text-label-2 font-normal">・{fs.companies.map((c) => c.name).join("、")}</span>}</div>
-              <div className="text-xs text-label-2 mt-0.5">{!fs?.configured ? "FREEE_CLIENT_ID / FREEE_CLIENT_SECRET が未設定のため接続できません。" : fs.last_sync ? `最終確認 ${new Date(fs.last_sync.at).toLocaleString("ja-JP")}・${fs.last_sync.checked}口座・古い ${fs.last_sync.stale}件${fs.last_sync.errors.length ? `・エラー: ${fs.last_sync.errors.join(" / ")}` : ""}` : "約1時間ごとにfreeeへ保存された銀行同期残高を読みます。銀行→freeeの同期は強制しません。"}</div>
+              <div className="text-xs text-label-2 mt-0.5">{!fs?.configured ? "FREEE_CLIENT_ID / FREEE_CLIENT_SECRET が未設定のため接続できません。" : fs.last_sync ? `最終確認 ${fmtDateTime(fs.last_sync.at)}・${fs.last_sync.checked}口座・古い ${fs.last_sync.stale}件${fs.last_sync.errors.length ? `・エラー: ${fs.last_sync.errors.join(" / ")}` : ""}` : "約1時間ごとにfreeeへ保存された銀行同期残高を読みます。銀行→freeeの同期は強制しません。"}</div>
             </div>
-            {fs?.connected ? <><Button onClick={sync} loading={syncing} data-testid="freee-sync">銀行残高を更新</Button><Button variant="ghost" onClick={disconnect}>接続を解除</Button></> : <Button variant="primary" onClick={connect} disabled={!fs?.configured} data-testid="freee-connect">freeeと接続</Button>}
+            {fs?.connected ? <><Button onClick={sync} loading={syncing} data-testid="freee-sync">銀行残高を更新</Button><Button variant="danger" onClick={disconnect}>接続を解除</Button></> : <Button variant="primary" onClick={connect} disabled={!fs?.configured} data-testid="freee-connect">freeeと接続</Button>}
           </div>
         </Card>
       </Section>
@@ -232,7 +236,7 @@ function AccountsTab({ accounts, onChanged }: { accounts: AssetAccount[]; onChan
             {accounts.map((a) => (
               <Item key={a.id} className="flex items-center gap-3 px-5 py-3">
                 <div className="min-w-0 flex-1"><div className="font-medium truncate" data-testid="account-name">{a.name}</div><div className="text-xs text-label-2">{a.owner_type === "personal" ? "個人" : a.owner}・{ASSET_CATEGORY_LABELS[a.category]}・{a.unit ?? a.currency}{a.source === "freee" ? `・freee${a.freee_walletable_id ? "" : "（反映先未設定）"}` : ""}</div></div>
-                <Button size="sm" onClick={() => openEdit(a)}>編集</Button><Button size="sm" variant="ghost" onClick={() => archive(a)}>アーカイブ</Button>
+                <Button size="sm" onClick={() => openEdit(a)} aria-label={`${a.name}を編集`}>編集</Button><Button size="sm" variant="danger" onClick={() => archive(a)} aria-label={`${a.name}をアーカイブ`}>アーカイブ</Button>
               </Item>
             ))}
           </Stagger>
@@ -265,17 +269,17 @@ function AllocateTab() {
   const [p, setP] = useState<AssetPlan | null>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (plan.data && !p) setP(plan.data); }, [plan.data, p]);
-  if (!p) return plan.error ? <EmptyState title="計画を取得できません" hint={plan.error} action={<Button onClick={() => plan.reload()}>再読み込み</Button>} /> : <PageSkeleton cards={2} />;
+  if (!p) return plan.error ? <div><ErrorBanner message={plan.error} onRetry={() => plan.reload()} testId="assets-error" /><EmptyState title="計画を取得できません" /></div> : <PageSkeleton cards={2} />;
   const numOr = (v: string) => (v === "" ? null : Number(v));
   const save = async () => { setSaving(true); try { await api.put("/assets/plan", p); toast("計画を保存しました", "success"); alloc.reload(true); } catch (e: any) { toast(e.message, "error"); } finally { setSaving(false); } };
   const a = alloc.data;
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
       <Card>
-        <h2 className="text-lg font-semibold mb-1">配分の案</h2>
+        <h2 className="text-lg font-semibold tracking-tight mb-1">配分の案</h2>
         <p className="text-xs text-label-2 mb-4">個人の円預金（2日以内に記録・freee同期）だけを基にします。法人資金や証券・FX・暗号資産は含めません。</p>
-        {!a ? (alloc.error ? <div className="text-sm text-red">{alloc.error}</div> : null) : a.undetermined ? (
-          <div data-testid="allocation-undetermined"><div className="text-2xl font-semibold">判断を保留</div><div className="text-sm text-orange mt-1">{a.reason}</div>{a.as_of && <div className="text-xs text-label-2 mt-1">最終記録 {a.as_of}</div>}</div>
+        {!a ? (alloc.error ? <ErrorBanner message={alloc.error} onRetry={() => alloc.reload()} className="mb-0" /> : null) : a.undetermined ? (
+          <div data-testid="allocation-undetermined"><div className="text-2xl font-semibold tracking-tight">判断を保留</div><div className="text-sm text-orange mt-1">{a.reason}</div>{a.as_of && <div className="text-xs text-label-2 mt-1 tabular">最終記録 {fmtD(a.as_of)}</div>}</div>
         ) : (
           <div className="space-y-4" data-testid="allocation-result">
             <div className="grid grid-cols-3 gap-3">
@@ -284,15 +288,15 @@ function AllocateTab() {
               <Stat label="運用に回す額" value={fmtYen(a.invest)} tone="green" />
             </div>
             <div className="text-xs text-label-2 space-y-0.5">
-              <div>対象の円預金 {fmtYen(a.cash)}（{a.as_of} 時点）</div>
-              <div>守る額の内訳: 生活費 {a.breakdown.living_months}か月分 {fmtYen(a.breakdown.living)}・予定支出 {fmtYen(a.breakdown.planned)}・負債 {fmtYen(a.breakdown.debts)}・確保 {fmtYen(a.breakdown.reserve)}</div>
+              <div className="tabular">対象の円預金 {fmtYen(a.cash)}（{fmtD(a.as_of)} 時点）</div>
+              <div className="tabular">守る額の内訳: 生活費 {a.breakdown.living_months}か月分 {fmtYen(a.breakdown.living)}・予定支出 {fmtYen(a.breakdown.planned)}・負債 {fmtYen(a.breakdown.debts)}・確保 {fmtYen(a.breakdown.reserve)}</div>
               <div>案であり、送金や購入は行いません。</div>
             </div>
           </div>
         )}
       </Card>
       <Card>
-        <h2 className="text-lg font-semibold mb-4">計画</h2>
+        <h2 className="text-lg font-semibold tracking-tight mb-4">計画</h2>
         <div className="grid grid-cols-2 gap-3">
           <Field label="毎月の生活費（円）"><Input inputMode="numeric" value={p.living_cost_monthly ?? ""} onChange={(e) => setP({ ...p, living_cost_monthly: numOr(e.target.value) })} data-testid="plan-living" /></Field>
           <Field label="確保する資金（円）"><Input inputMode="numeric" value={p.reserve_amount ?? ""} onChange={(e) => setP({ ...p, reserve_amount: numOr(e.target.value) })} data-testid="plan-reserve" /></Field>
@@ -312,7 +316,7 @@ function ListEditor({ label, items, onChange }: { label: string; items: { label:
       <div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-label-2">{label}</span><Button size="sm" variant="ghost" onClick={() => onChange([...items, { label: "", amount: 0 }])}>追加</Button></div>
       {items.length === 0 && <div className="text-xs text-label-3">なし</div>}
       <div className="space-y-2">{items.map((it, i) => (
-        <div key={i} className="flex gap-2"><Input placeholder="内容" value={it.label} onChange={(e) => onChange(items.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} /><Input inputMode="numeric" placeholder="金額" className="w-36 text-right tabular" value={it.amount || ""} onChange={(e) => onChange(items.map((x, j) => (j === i ? { ...x, amount: Number(e.target.value) || 0 } : x)))} /><Button variant="ghost" onClick={() => onChange(items.filter((_, j) => j !== i))}>削除</Button></div>
+        <div key={i} className="flex gap-2"><Input placeholder="内容" aria-label="内容" value={it.label} onChange={(e) => onChange(items.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} /><Input inputMode="numeric" placeholder="金額" aria-label="金額（円）" className="w-36 text-right tabular" value={it.amount || ""} onChange={(e) => onChange(items.map((x, j) => (j === i ? { ...x, amount: Number(e.target.value) || 0 } : x)))} /><Button variant="ghost" className="text-red" aria-label={`${it.label || label}の行を削除`} onClick={() => onChange(items.filter((_, j) => j !== i))}>削除</Button></div>
       ))}</div>
     </div>
   );

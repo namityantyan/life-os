@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "motion/react";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes, type TdHTMLAttributes, type ThHTMLAttributes } from "react";
 
 export const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
@@ -58,6 +58,57 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
   return <div className="flex flex-col items-center justify-center text-center py-12 gap-2"><div className="text-label-2 font-medium">{title}</div>{hint && <div className="text-label-3 text-sm max-w-xs">{hint}</div>}{action && <div className="mt-2">{action}</div>}</div>;
 }
 export function Divider() { return <div className="h-px bg-separator" />; }
+/** Inline load-failure banner with a retry button. Pages keep rendering whatever data they already have. */
+export function ErrorBanner({ message, onRetry, className, testId }: { message?: string | null; onRetry?: () => void; className?: string; testId?: string }) {
+  return (
+    <div role="alert" data-testid={testId} className={cx("mb-5 rounded-[var(--radius-lg)] bg-red/10 text-red px-5 py-3 text-sm flex flex-wrap items-center gap-3", className)}>
+      <span className="flex-1 min-w-0 break-words">読み込みに失敗しました{message ? `（${message}）` : ""}</span>
+      {onRetry && <Button size="sm" onClick={onRetry}>再読み込み</Button>}
+    </div>
+  );
+}
+
+/* ---------- Tables ---------- */
+/** Data table: tabular numerals, hairline row separators, horizontal scroll on narrow screens. Use inside <Card padded={false}>. */
+export function Table({ children, className, testId }: { children: ReactNode; className?: string; testId?: string }) {
+  return <div className="relative overflow-x-auto"><table data-testid={testId} className={cx("w-full text-sm tabular", className)}>{children}</table></div>;
+}
+const alignCls = (a?: "left" | "right" | "center") => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
+export function Th({ children, align, className, ...rest }: ThHTMLAttributes<HTMLTableCellElement> & { align?: "left" | "right" | "center" }) {
+  return <th scope="col" className={cx("px-4 py-2.5 text-xs font-medium text-label-2 whitespace-nowrap", alignCls(align), className)} {...rest}>{children}</th>;
+}
+export function Td({ children, align, className, ...rest }: TdHTMLAttributes<HTMLTableCellElement> & { align?: "left" | "right" | "center" }) {
+  return <td className={cx("px-4 py-2.5 whitespace-nowrap align-middle", alignCls(align), className)} {...rest}>{children}</td>;
+}
+/** Row class for <tr> inside <Table>. */
+export const trCls = "border-t border-separator";
+
+/* ---------- Chart helpers ---------- */
+export type ChartColors = { accent: string; green: string; red: string; orange: string; label: string; label2: string; label3: string; separator: string; elevated: string; fill: string; fontSans: string; tickFont: number };
+const CHART_FALLBACK: ChartColors = { accent: "#0a84ff", green: "#34c759", red: "#ff3b30", orange: "#ff9500", label: "#1d1d1f", label2: "rgba(60,60,67,0.6)", label3: "rgba(60,60,67,0.3)", separator: "rgba(60,60,67,0.12)", elevated: "#ffffff", fill: "rgba(120,120,128,0.12)", fontSans: "system-ui, sans-serif", tickFont: 11 };
+function readChartColors(): ChartColors {
+  if (typeof document === "undefined") return CHART_FALLBACK;
+  const css = getComputedStyle(document.documentElement);
+  const v = (name: string, fb: string) => css.getPropertyValue(name).trim() || fb;
+  const rootPx = parseFloat(css.fontSize) || 16;
+  return { accent: v("--accent", CHART_FALLBACK.accent), green: v("--green", CHART_FALLBACK.green), red: v("--red", CHART_FALLBACK.red), orange: v("--orange", CHART_FALLBACK.orange), label: v("--label", CHART_FALLBACK.label), label2: v("--label-2", CHART_FALLBACK.label2), label3: v("--label-3", CHART_FALLBACK.label3), separator: v("--separator", CHART_FALLBACK.separator), elevated: v("--bg-elevated", CHART_FALLBACK.elevated), fill: v("--fill", CHART_FALLBACK.fill), fontSans: v("--font-sans", CHART_FALLBACK.fontSans), tickFont: Math.round(rootPx * 0.6875) };
+}
+/** Resolved design-token colors for canvas/SVG charts (recharts, lightweight-charts). Re-reads when the theme or font scale changes. */
+export function useChartColors(): ChartColors {
+  const [c, setC] = useState<ChartColors>(readChartColors);
+  useEffect(() => {
+    const update = () => setC(readChartColors());
+    update();
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
+    return () => mo.disconnect();
+  }, []);
+  return c;
+}
+/** Tooltip body for recharts custom `content`. */
+export function ChartTip({ label, value }: { label: ReactNode; value: ReactNode }) {
+  return <div className="glass rounded-[var(--radius-md)] px-3 py-2 text-sm shadow-[var(--shadow-pop)]"><div className="text-label-2 text-xs">{label}</div><div className="tabular font-medium">{value}</div></div>;
+}
 
 /* ---------- Skeletons ---------- */
 export function Skeleton({ className }: { className?: string }) { return <div className={cx("skeleton", className)} />; }
@@ -93,8 +144,15 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 export function Segmented<T extends string>({ value, onChange, options, className, testId }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode }[]; className?: string; testId?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Narrow screens scroll the control horizontally; keep the selected tab visible without moving the page.
+  useEffect(() => {
+    const c = ref.current; const b = c?.querySelector<HTMLElement>('[aria-selected="true"]'); if (!c || !b) return;
+    if (b.offsetLeft < c.scrollLeft) c.scrollLeft = Math.max(0, b.offsetLeft - 8);
+    else if (b.offsetLeft + b.offsetWidth > c.scrollLeft + c.clientWidth) c.scrollLeft = b.offsetLeft + b.offsetWidth - c.clientWidth + 8;
+  }, [value]);
   return (
-    <div className={cx("inline-flex p-0.5 rounded-[var(--radius-md)] bg-fill relative", className)} role="tablist" data-testid={testId}>
+    <div ref={ref} className={cx("inline-flex max-w-[calc(100vw-2rem)] overflow-x-auto p-0.5 rounded-[var(--radius-md)] bg-fill relative whitespace-nowrap", className)} role="tablist" data-testid={testId}>
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("focus-ring relative z-10 px-3 h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
           {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
