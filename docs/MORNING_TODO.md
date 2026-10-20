@@ -28,9 +28,18 @@
 - **FX コネクター**: `FX_CONNECTOR_TOKEN` を secret に設定し、`connector/` の Python を Windows に配置（MT5 実装は TODO）
 
 ## 4. GitHub
-- リポジトリは public で作成済み（URL は最終報告に記載）。秘密情報は含まれていません（`.dev.vars` は gitignore）。
+- リポジトリは public で作成済み: https://github.com/namityantyan/life-os秘密情報は含まれていません（`.dev.vars` は gitignore）。
 
 ## 5. 確認してほしい設計判断
 - Discord は Workers の制約で「メンション反応」ではなく `/chat` スラッシュコマンド方式（docs/discord.md）
 - FX の自動売買本体は従来どおり Windows 側。サーバーは許可・履歴・通知・チャートのみ
 - AI は Workers AI（Llama 3.3 70B）。Claude API を併用したい場合は `worker/core/ai.ts` に追加可能
+
+## 6. ローカルで触る
+
+```bash
+cd /Users/nami/Claude/Projects/life-os
+npm run dev
+```
+
+http://localhost:5173 を開き「開発用ログイン」を押す（Google未設定でも入れます）。テストは `npm test` と `npm run test:e2e`。
