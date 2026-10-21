@@ -149,27 +149,14 @@ export function formatSleepDuration(sec: number | null | undefined): string {
   return `${h}時間${String(m).padStart(2, "0")}分`;
 }
 
-/* ---------- Meal chat proposals (routine add / update / remove, targets) ---------- */
-export const MEAL_SLOTS = ["breakfast", "lunch", "dinner", "snack"] as const;
-export type MealSlot = (typeof MEAL_SLOTS)[number];
-const SLOT_ALIASES: Record<string, MealSlot> = {
-  breakfast: "breakfast", 朝: "breakfast", 朝食: "breakfast", 朝ごはん: "breakfast", あさ: "breakfast",
-  lunch: "lunch", 昼: "lunch", 昼食: "lunch", 昼ごはん: "lunch", ランチ: "lunch",
-  dinner: "dinner", 夜: "dinner", 夕: "dinner", 夕食: "dinner", 晩: "dinner", 晩ごはん: "dinner", 夜ごはん: "dinner", ディナー: "dinner",
-  snack: "snack", 間食: "snack", おやつ: "snack", 補食: "snack", スナック: "snack",
-};
-export function normalizeSlot(v: unknown): MealSlot | null {
-  if (typeof v !== "string") return null;
-  return SLOT_ALIASES[v.trim().toLowerCase()] ?? SLOT_ALIASES[v.trim()] ?? null;
-}
-
-export type MealFields = { slot?: MealSlot; food_name?: string; amount?: number | null; unit?: string | null; cost_per_serving?: number | null; nutrition?: Nutrition | null };
-export type MealOp =
-  | { op: "add"; slot: MealSlot; food_name: string; amount: number | null; unit: string | null; cost_per_serving: number | null; nutrition: Nutrition | null }
-  | { op: "update"; id: string; food_name: string; changes: MealFields }
+/* ---------- Meal chat proposals (log entries, saved foods, targets) ---------- */
+export type LogChanges = { food_name?: string; amount?: number | null; unit?: string | null; cost?: number | null; nutrition?: Nutrition | null };
+export type LogOp =
+  | { op: "add"; food_name: string; amount: number | null; unit: string | null; cost: number | null; nutrition: Nutrition | null; save_as_food: boolean }
+  | { op: "update"; id: string; food_name: string; changes: LogChanges }
   | { op: "remove"; id: string; food_name: string };
-export type ExistingMeal = { id: string; slot: string; food_name: string; amount?: number | null; nutrition?: Nutrition | null };
-export type MealProposal = { targets: Nutrition | null; routines: MealOp[] };
+export type ExistingEntry = { id: string; food_name: string; amount?: number | null; nutrition?: Nutrition | null };
+export type MealProposal = { targets: Nutrition | null; entries: LogOp[] };
 
 const mealNum = (v: unknown, { min = 0, max = 1e6 } = {}): number | null | undefined => {
   if (v === undefined) return undefined;
@@ -180,57 +167,57 @@ const mealNum = (v: unknown, { min = 0, max = 1e6 } = {}): number | null | undef
 const text = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const sameName = (a: string, b: string) => a.normalize("NFKC").replace(/\s/g, "").toLowerCase() === b.normalize("NFKC").replace(/\s/g, "").toLowerCase();
 
-/** Resolve an update/remove target: by id, else by unique food name (and slot when given). */
-function resolveExisting(raw: Record<string, unknown>, existing: ExistingMeal[]): ExistingMeal | null {
+/** Resolve an update/remove target: by id, else by a unique food name in today's log. */
+function resolveEntry(raw: Record<string, unknown>, existing: ExistingEntry[]): ExistingEntry | null {
   const id = typeof raw.id === "string" ? raw.id : null;
   if (id) return existing.find((m) => m.id === id) ?? null;
   const name = text(raw.target_food_name ?? raw.food_name_before ?? raw.food_name, 120);
   if (!name) return null;
-  const slot = normalizeSlot(raw.target_slot ?? raw.slot);
-  const hits = existing.filter((m) => sameName(m.food_name, name) && (!slot || m.slot === slot));
+  const hits = existing.filter((m) => sameName(m.food_name, name));
   return hits.length === 1 ? hits[0]! : null; // ambiguous or unknown → drop
 }
 
 /**
- * Validates an AI proposal against the current routine. Invalid, unresolvable or no-op items are dropped,
- * so the UI only ever offers changes that can be applied safely. At most 12 routine operations.
+ * Validates an AI proposal against today's log. Invalid, unresolvable or no-op items are dropped,
+ * so the UI only ever offers changes that can be applied safely. At most 12 operations.
  */
-export function normalizeMealProposal(raw: unknown, existing: ExistingMeal[]): MealProposal {
+export function normalizeMealProposal(raw: unknown, existing: ExistingEntry[]): MealProposal {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const targets = r.targets && typeof r.targets === "object" ? parseNutrition(JSON.stringify(r.targets)) : null;
-  const ops: MealOp[] = [];
+  const ops: LogOp[] = [];
   const touched = new Set<string>();
-  for (const it of Array.isArray(r.routines) ? r.routines.slice(0, 20) : []) {
+  const list = Array.isArray(r.entries) ? r.entries : Array.isArray(r.routines) ? r.routines : [];
+  for (const it of list.slice(0, 20)) {
     if (!it || typeof it !== "object") continue;
     const o = it as Record<string, unknown>;
     const kind = String(o.op ?? o.action ?? "").toLowerCase();
     if (kind === "add" || kind === "追加") {
-      const slot = normalizeSlot(o.slot); const food = text(o.food_name, 120);
-      if (!slot || !food) continue;
-      if (ops.some((x) => x.op === "add" && x.slot === slot && sameName(x.food_name, food))) continue;
-      const amount = mealNum(o.amount, { min: 0.01, max: 100000 }); const cost = mealNum(o.cost_per_serving ?? o.cost, { min: 0, max: 1e6 });
-      ops.push({ op: "add", slot, food_name: food, amount: amount ?? null, unit: text(o.unit, 20), cost_per_serving: cost ?? null, nutrition: o.nutrition ? parseNutrition(JSON.stringify(o.nutrition)) : null });
+      const food = text(o.food_name ?? o.name, 120);
+      if (!food) continue;
+      if (ops.some((x) => x.op === "add" && sameName(x.food_name, food))) continue;
+      const amount = mealNum(o.amount, { min: 0.01, max: 100000 });
+      const cost = mealNum(o.cost ?? o.cost_per_serving, { min: 0, max: 1e6 });
+      ops.push({ op: "add", food_name: food, amount: amount ?? null, unit: text(o.unit, 20), cost: cost ?? null,
+        nutrition: o.nutrition ? parseNutrition(JSON.stringify(o.nutrition)) : null, save_as_food: o.save_as_food !== false });
     } else if (kind === "update" || kind === "change" || kind === "変更") {
-      const cur = resolveExisting(o, existing); if (!cur || touched.has(cur.id)) continue;
+      const cur = resolveEntry(o, existing); if (!cur || touched.has(cur.id)) continue;
       const src = (o.changes && typeof o.changes === "object" ? o.changes : o) as Record<string, unknown>;
-      const changes: MealFields = {};
-      const slot = src.new_slot !== undefined ? normalizeSlot(src.new_slot) : src.slot !== undefined && o.changes ? normalizeSlot(src.slot) : null;
-      if (slot && slot !== cur.slot) changes.slot = slot;
+      const changes: LogChanges = {};
       const newName = text(src.new_food_name ?? (o.changes ? src.food_name : undefined), 120);
       if (newName && !sameName(newName, cur.food_name)) changes.food_name = newName;
       const amount = mealNum(src.amount, { min: 0.01, max: 100000 }); if (amount !== undefined && amount !== (cur.amount ?? null)) changes.amount = amount;
       if (src.unit !== undefined) { const u = text(src.unit, 20); if (u !== null) changes.unit = u; }
-      const cost = mealNum(src.cost_per_serving ?? src.cost, { min: 0, max: 1e6 }); if (cost !== undefined) changes.cost_per_serving = cost;
+      const cost = mealNum(src.cost ?? src.cost_per_serving, { min: 0, max: 1e6 }); if (cost !== undefined) changes.cost = cost;
       if (src.nutrition && typeof src.nutrition === "object") { const n = parseNutrition(JSON.stringify(src.nutrition)); if (n) changes.nutrition = n; }
       if (!Object.keys(changes).length) continue;
       touched.add(cur.id); ops.push({ op: "update", id: cur.id, food_name: cur.food_name, changes });
     } else if (kind === "remove" || kind === "delete" || kind === "削除") {
-      const cur = resolveExisting(o, existing); if (!cur || touched.has(cur.id)) continue;
+      const cur = resolveEntry(o, existing); if (!cur || touched.has(cur.id)) continue;
       touched.add(cur.id); ops.push({ op: "remove", id: cur.id, food_name: cur.food_name });
     }
     if (ops.length >= 12) break;
   }
-  return { targets: targets && Object.keys(targets).length ? targets : null, routines: ops };
+  return { targets: targets && Object.keys(targets).length ? targets : null, entries: ops };
 }
 
 /** When only the amount changes, scale the stored per-serving nutrition by the ratio (result is an estimate). */

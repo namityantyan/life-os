@@ -7,7 +7,8 @@ import { chatJson } from "../../core/ai";
 import { adviseWithContext, buildLifeContext, suggestAction } from "../../core/context";
 import { fetchWeather, type WeatherSnapshot } from "../../core/weather";
 import { syncOura } from "./oura";
-import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, scaleNutrition, MEAL_SLOTS, type Nutrition, type NutrientKey, type MealOp } from "./logic";
+import { mealRoutes, dayLog } from "./meals";
+import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -71,7 +72,10 @@ routes.post("/oura/sync", async (c) => {
   catch (e) { return c.json({ ok: false, error: String((e as Error)?.message ?? e) }, 502); }
 });
 
-/* ---------- Meals ---------- */
+/* ---------- Meals: daily log, saved foods, sets (meals.ts) ---------- */
+routes.route("/meals", mealRoutes);
+
+/* ---------- Meals: legacy routine rows (now set members) ---------- */
 const SLOTS = ["breakfast", "lunch", "dinner", "snack"] as const;
 const mealBody = z.object({
   slot: z.enum(SLOTS), food_name: z.string().min(1).max(120), amount: z.number().nullable().optional(), unit: z.string().max(20).nullable().optional(),
@@ -80,70 +84,44 @@ const mealBody = z.object({
 type MealRow = { id: string; slot: string; food_name: string; amount: number | null; unit: string | null; nutrition_json: string | null; nutrition_source: string | null; cost_per_serving: number | null; sort_order: number; updated_at: string };
 const mealOut = (m: MealRow) => ({ ...m, nutrition: parseNutrition(m.nutrition_json) });
 
+/** Today's eaten log (not the saved sets) is what the AI and the summary endpoints report on. */
 async function mealSummary(env: Env, userId: string) {
-  const items = await all<MealRow>(env.DB, "SELECT * FROM meal_routines WHERE user_id=?", userId);
-  const targets = await getSetting<Partial<Record<NutrientKey, number>>>(env, userId, "nutrition_targets", {});
-  return { nutrition: summarizeNutrition(items), cost: estimateCost(items), targets };
+  const { summary } = await dayLog(env, userId, jstDate());
+  return summary;
 }
-routes.get("/meals", async (c) => {
-  const user = c.get("user");
-  const items = await all<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE user_id=? ORDER BY CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, sort_order, created_at", user.id);
-  return c.json({ items: items.map(mealOut), summary: await mealSummary(c.env, user.id) });
-});
 routes.get("/meals/summary", async (c) => c.json(await mealSummary(c.env, c.get("user").id)));
-routes.post("/meals", async (c) => {
-  const user = c.get("user");
-  const b = mealBody.parse(await c.req.json());
-  const id = newId();
-  const hasN = b.nutrition && Object.keys(b.nutrition).length > 0;
-  await run(c.env.DB, "INSERT INTO meal_routines (id,user_id,slot,food_name,amount,unit,nutrition_json,nutrition_source,cost_per_serving,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)",
-    id, user.id, b.slot, b.food_name, b.amount ?? null, b.unit ?? null, hasN ? JSON.stringify(b.nutrition) : null, hasN ? "recorded" : null, b.cost_per_serving ?? null, b.sort_order ?? 0);
-  return c.json({ item: mealOut((await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=?", id))!) });
-});
-routes.put("/meals/:id", async (c) => {
-  const user = c.get("user"); const id = c.req.param("id");
-  const cur = await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=? AND user_id=?", id, user.id);
-  if (!cur) return c.json({ error: "not found" }, 404);
-  const b = mealBody.partial().parse(await c.req.json());
-  let nutritionJson = cur.nutrition_json, source = cur.nutrition_source;
-  if (b.nutrition !== undefined) {
-    if (b.nutrition && Object.keys(b.nutrition).length) { nutritionJson = JSON.stringify(b.nutrition); source = "recorded"; }
-    else { nutritionJson = null; source = null; }
+
+/** Estimate the nutrition of a logged entry or a saved food with the AI. Recorded values need `confirm`. */
+type Estimable = { id: string; name: string; amount: number | null; unit: string | null; nutrition_source: string | null };
+async function loadEstimable(env: Env, userId: string, kind: "entry" | "food", id: string): Promise<Estimable | null> {
+  if (kind === "food") {
+    const f = await one<{ id: string; name: string; amount: number | null; unit: string | null; nutrition_source: string | null }>(env.DB, "SELECT id,name,amount,unit,nutrition_source FROM meal_foods WHERE id=? AND user_id=?", id, userId);
+    return f ?? null;
   }
-  await run(c.env.DB, "UPDATE meal_routines SET slot=?,food_name=?,amount=?,unit=?,nutrition_json=?,nutrition_source=?,cost_per_serving=?,sort_order=?,updated_at=datetime('now') WHERE id=?",
-    b.slot ?? cur.slot, b.food_name ?? cur.food_name, b.amount === undefined ? cur.amount : b.amount, b.unit === undefined ? cur.unit : b.unit,
-    nutritionJson, source, b.cost_per_serving === undefined ? cur.cost_per_serving : b.cost_per_serving, b.sort_order ?? cur.sort_order, id);
-  return c.json({ item: mealOut((await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=?", id))!) });
-});
-routes.delete("/meals/:id", async (c) => {
+  const e = await one<{ id: string; food_name: string; amount: number | null; unit: string | null; nutrition_source: string | null }>(env.DB, "SELECT id,food_name,amount,unit,nutrition_source FROM meal_entries WHERE id=? AND user_id=?", id, userId);
+  return e ? { id: e.id, name: e.food_name, amount: e.amount, unit: e.unit, nutrition_source: e.nutrition_source } : null;
+}
+async function estimateNutrition(env: Env, target: Estimable) {
+  const prompt = `次の食品1回分の栄養を日本食品標準成分表の知識で推定し、JSONのみで返してください。キーは ${NUTRIENT_KEYS.join(", ")}。不明なキーは省略。値は数値のみ。\n食品: ${target.name}${target.amount != null ? ` ${target.amount}${target.unit ?? ""}` : ""}`;
+  const r = await chatJson<Record<string, unknown>>(env, [{ role: "system", content: "あなたは管理栄養士です。JSONオブジェクトのみを出力します。" }, { role: "user", content: prompt }], {});
+  return { estimate: parseNutrition(JSON.stringify(r.data)), provider: r.provider };
+}
+routes.post("/meals/:kind/:id/estimate", async (c) => {
   const user = c.get("user");
-  await run(c.env.DB, "DELETE FROM meal_routines WHERE id=? AND user_id=?", c.req.param("id"), user.id);
-  return c.json({ ok: true });
-});
-/** AI nutrition estimate. Recorded values are never overwritten unless `confirm:true`. Fallback (AI offline) stores nothing. */
-routes.post("/meals/:id/estimate", async (c) => {
-  const user = c.get("user"); const id = c.req.param("id");
-  const b = z.object({ confirm: z.boolean().optional(), apply: z.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
-  const cur = await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=? AND user_id=?", id, user.id);
+  const kind = z.enum(["entry", "food"]).parse(c.req.param("kind"));
+  const id = c.req.param("id");
+  const b = z.object({ confirm: z.boolean().optional(), apply: z.boolean().optional(), nutrition: nutritionSchema }).parse(await c.req.json().catch(() => ({})));
+  const cur = await loadEstimable(c.env, user.id, kind, id);
   if (!cur) return c.json({ error: "not found" }, 404);
-  const prompt = `次の食品1回分の栄養を日本食品標準成分表の知識で推定し、JSONのみで返してください。キーは ${NUTRIENT_KEYS.join(", ")}。不明なキーは省略。値は数値のみ。\n食品: ${cur.food_name}${cur.amount != null ? ` ${cur.amount}${cur.unit ?? ""}` : ""}`;
-  const r = await chatJson<Record<string, unknown>>(c.env, [{ role: "system", content: "あなたは管理栄養士です。JSONオブジェクトのみを出力します。" }, { role: "user", content: prompt }], {});
-  const est = parseNutrition(JSON.stringify(r.data));
-  if (r.provider === "fallback" || !est) return c.json({ applied: false, reason: "ai_unavailable", estimate: null, provider: r.provider });
-  if (cur.nutrition_source === "recorded" && !b.confirm) return c.json({ applied: false, reason: "recorded", estimate: est, provider: r.provider });
-  if (b.apply === false) return c.json({ applied: false, reason: "preview", estimate: est, provider: r.provider });
-  await run(c.env.DB, "UPDATE meal_routines SET nutrition_json=?, nutrition_source='estimated', updated_at=datetime('now') WHERE id=?", JSON.stringify(est), id);
-  return c.json({ applied: true, estimate: est, provider: r.provider, item: mealOut((await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=?", id))!) });
-});
-/** Apply an estimate coming from the meal chat ("推定値を反映"). Same overwrite rule. */
-routes.post("/meals/:id/apply-estimate", async (c) => {
-  const user = c.get("user"); const id = c.req.param("id");
-  const b = z.object({ nutrition: nutritionSchema, confirm: z.boolean().optional() }).parse(await c.req.json());
-  const cur = await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=? AND user_id=?", id, user.id);
-  if (!cur) return c.json({ error: "not found" }, 404);
-  if (cur.nutrition_source === "recorded" && !b.confirm) return c.json({ applied: false, reason: "recorded" });
-  await run(c.env.DB, "UPDATE meal_routines SET nutrition_json=?, nutrition_source='estimated', updated_at=datetime('now') WHERE id=?", JSON.stringify(b.nutrition), id);
-  return c.json({ applied: true, item: mealOut((await one<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE id=?", id))!) });
+  let est: Nutrition | null = null, provider = "given";
+  if (b.nutrition && Object.keys(b.nutrition).length) est = b.nutrition as Nutrition;
+  else { const r = await estimateNutrition(c.env, cur); est = r.estimate; provider = r.provider; }
+  if (!est) return c.json({ applied: false, reason: "ai_unavailable", estimate: null, provider });
+  if (cur.nutrition_source === "recorded" && !b.confirm) return c.json({ applied: false, reason: "recorded", estimate: est, provider });
+  if (b.apply === false) return c.json({ applied: false, reason: "preview", estimate: est, provider });
+  const table = kind === "food" ? "meal_foods" : "meal_entries";
+  await run(c.env.DB, `UPDATE ${table} SET nutrition_json=?, nutrition_source='estimated', updated_at=datetime('now') WHERE id=? AND user_id=?`, JSON.stringify(est), id, user.id);
+  return c.json({ applied: true, estimate: est, provider });
 });
 
 /* ---------- Nutrition targets ---------- */
@@ -155,36 +133,50 @@ routes.put("/targets", async (c) => {
   return c.json({ targets: t });
 });
 
-/* ---------- Apply a meal chat proposal (routine add/update/remove + targets) ---------- */
+/* ---------- Apply a meal chat proposal (today's log + targets) ---------- */
 const nutritionLoose = z.record(z.string(), z.number()).nullable().optional();
-const mealOpZ = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("add"), slot: z.enum(MEAL_SLOTS), food_name: z.string().min(1).max(120), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost_per_serving: z.number().min(0).nullable().optional(), nutrition: nutritionLoose }),
-  z.object({ op: z.literal("update"), id: z.string().min(1), food_name: z.string().optional(), changes: z.object({ slot: z.enum(MEAL_SLOTS).optional(), food_name: z.string().min(1).max(120).optional(), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost_per_serving: z.number().min(0).nullable().optional(), nutrition: nutritionLoose }) }),
+const logOpZ = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("add"), food_name: z.string().min(1).max(120), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost: z.number().min(0).nullable().optional(), nutrition: nutritionLoose, save_as_food: z.boolean().optional() }),
+  z.object({ op: z.literal("update"), id: z.string().min(1), food_name: z.string().optional(), changes: z.object({ food_name: z.string().min(1).max(120).optional(), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost: z.number().min(0).nullable().optional(), nutrition: nutritionLoose }) }),
   z.object({ op: z.literal("remove"), id: z.string().min(1), food_name: z.string().optional() }),
 ]);
 routes.post("/meals/apply-proposal", async (c) => {
   const user = c.get("user");
-  const b = z.object({ message_id: z.string().optional(), routines: z.array(mealOpZ).max(12).default([]), targets: nutritionLoose }).parse(await c.req.json());
-  // Re-validate against the routine as it is now (the proposal may be old).
-  const existing = (await all<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE user_id=?", user.id)).map(mealOut);
-  const norm = normalizeMealProposal({ routines: b.routines, targets: b.targets ?? null }, existing.map((m) => ({ id: m.id, slot: m.slot, food_name: m.food_name, amount: m.amount, nutrition: m.nutrition })));
-  const stmts: D1PreparedStatement[] = []; const done = { added: 0, updated: 0, removed: 0, targets: false, skipped: b.routines.length - norm.routines.length };
-  for (const op of norm.routines as MealOp[]) {
+  const b = z.object({ message_id: z.string().optional(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), entries: z.array(logOpZ).max(12).default([]), targets: nutritionLoose }).parse(await c.req.json());
+  const day = b.day ?? jstDate();
+  // Re-validate against the log as it is now (the proposal may be old).
+  const existing = (await all<{ id: string; food_name: string; amount: number | null; nutrition_json: string | null; nutrition_source: string | null; cost: number | null }>(
+    c.env.DB, "SELECT id,food_name,amount,nutrition_json,nutrition_source,cost FROM meal_entries WHERE user_id=? AND day=?", user.id, day));
+  const norm = normalizeMealProposal({ entries: b.entries, targets: b.targets ?? null }, existing.map((m) => ({ id: m.id, food_name: m.food_name, amount: m.amount, nutrition: parseNutrition(m.nutrition_json) })));
+  const stmts: D1PreparedStatement[] = [];
+  const done = { added: 0, updated: 0, removed: 0, targets: false, skipped: b.entries.length - norm.entries.length };
+  let order = (await one<{ n: number }>(c.env.DB, "SELECT COALESCE(MAX(sort_order),-1)+1 n FROM meal_entries WHERE user_id=? AND day=?", user.id, day))?.n ?? 0;
+  for (const op of norm.entries) {
     if (op.op === "add") {
       const hasN = op.nutrition && Object.keys(op.nutrition).length > 0;
-      stmts.push(c.env.DB.prepare("INSERT INTO meal_routines (id,user_id,slot,food_name,amount,unit,nutrition_json,nutrition_source,cost_per_serving,sort_order) VALUES (?,?,?,?,?,?,?,?,?,0)")
-        .bind(newId(), user.id, op.slot, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(op.nutrition) : null, hasN ? "estimated" : null, op.cost_per_serving));
+      stmts.push(c.env.DB.prepare("INSERT INTO meal_entries (id,user_id,day,food_name,amount,unit,nutrition_json,nutrition_source,cost,servings,sort_order) VALUES (?,?,?,?,?,?,?,?,?,1,?)")
+        .bind(newId(), user.id, day, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(op.nutrition) : null, hasN ? "estimated" : null, op.cost, order++));
+      if (op.save_as_food) {
+        const dup = await one<{ id: string }>(c.env.DB, "SELECT id FROM meal_foods WHERE user_id=? AND name=? AND archived_at IS NULL", user.id, op.food_name);
+        stmts.push(dup
+          ? c.env.DB.prepare("UPDATE meal_foods SET use_count=use_count+1, last_used_at=datetime('now') WHERE id=?").bind(dup.id)
+          : c.env.DB.prepare("INSERT INTO meal_foods (id,user_id,name,amount,unit,nutrition_json,nutrition_source,cost_per_serving,use_count,last_used_at) VALUES (?,?,?,?,?,?,?,?,1,datetime('now'))")
+              .bind(newId(), user.id, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(op.nutrition) : null, hasN ? "estimated" : null, op.cost));
+      }
       done.added++;
     } else if (op.op === "update") {
       const cur = existing.find((m) => m.id === op.id)!; const ch = op.changes;
       let nJson = cur.nutrition_json, src = cur.nutrition_source;
       if (ch.nutrition) { nJson = JSON.stringify(ch.nutrition); src = "estimated"; }
-      else if (ch.amount != null && cur.nutrition) { const scaled = scaleNutrition(cur.nutrition, cur.amount, ch.amount); if (scaled) { nJson = JSON.stringify(scaled); src = "estimated"; } }
-      stmts.push(c.env.DB.prepare("UPDATE meal_routines SET slot=?,food_name=?,amount=?,unit=?,nutrition_json=?,nutrition_source=?,cost_per_serving=?,updated_at=datetime('now') WHERE id=? AND user_id=?")
-        .bind(ch.slot ?? cur.slot, ch.food_name ?? cur.food_name, ch.amount === undefined ? cur.amount : ch.amount, ch.unit === undefined ? cur.unit : ch.unit, nJson, src, ch.cost_per_serving === undefined ? cur.cost_per_serving : ch.cost_per_serving, op.id, user.id));
+      else if (ch.amount != null && cur.amount && parseNutrition(cur.nutrition_json)) {
+        const scaled = scaleNutrition(parseNutrition(cur.nutrition_json), cur.amount, ch.amount);
+        if (scaled) { nJson = JSON.stringify(scaled); src = "estimated"; }
+      }
+      stmts.push(c.env.DB.prepare("UPDATE meal_entries SET food_name=?,amount=?,unit=COALESCE(?,unit),nutrition_json=?,nutrition_source=?,cost=?,updated_at=datetime('now') WHERE id=? AND user_id=?")
+        .bind(ch.food_name ?? cur.food_name, ch.amount === undefined ? cur.amount : ch.amount, ch.unit ?? null, nJson, src, ch.cost === undefined ? cur.cost : ch.cost, op.id, user.id));
       done.updated++;
     } else {
-      stmts.push(c.env.DB.prepare("DELETE FROM meal_routines WHERE id=? AND user_id=?").bind(op.id, user.id));
+      stmts.push(c.env.DB.prepare("DELETE FROM meal_entries WHERE id=? AND user_id=?").bind(op.id, user.id));
       done.removed++;
     }
   }
@@ -196,11 +188,14 @@ routes.post("/meals/apply-proposal", async (c) => {
   }
   if (b.message_id) {
     const msg = await one<{ meta_json: string | null }>(c.env.DB, "SELECT meta_json FROM chat_messages WHERE id=? AND user_id=? AND channel='meal'", b.message_id, user.id);
-    if (msg) { const meta = (() => { try { return JSON.parse(msg.meta_json ?? "{}"); } catch { return {}; } })(); meta.applied = { at: new Date().toISOString(), ...done };
-      stmts.push(c.env.DB.prepare("UPDATE chat_messages SET meta_json=? WHERE id=?").bind(JSON.stringify(meta), b.message_id)); }
+    if (msg) {
+      const meta = (() => { try { return JSON.parse(msg.meta_json ?? "{}"); } catch { return {}; } })();
+      meta.applied = { at: new Date().toISOString(), ...done };
+      stmts.push(c.env.DB.prepare("UPDATE chat_messages SET meta_json=? WHERE id=?").bind(JSON.stringify(meta), b.message_id));
+    }
   }
   if (stmts.length) await c.env.DB.batch(stmts);
-  return c.json({ ok: true, ...done });
+  return c.json({ ok: true, ...done, ...(await dayLog(c.env, user.id, day)) });
 });
 
 /* ---------- Beauty ---------- */
@@ -296,7 +291,7 @@ routes.get("/pressure/personal", async (c) => {
 const CHANNELS = ["health", "meal", "beauty"] as const;
 const ROLE_TEXT: Record<(typeof CHANNELS)[number], string> = {
   health: "健康コーチ。睡眠・回復・歩数・筋トレ・気圧・検診値を踏まえて今日の過ごし方を提案する。検査値から診断や治療方針は決めない。",
-  meal: "管理栄養士。登録された食事ルーティン（食べる予定）と目標を比較し、栄養の目標案や不足分の推定を提案する。合計が途中の値のときは不足・過剰を断定しない。あなた自身はルーティンや目標を変更できない。変更の依頼には、完了した言い方（「追加しました」）も指示の言い方（「追加してください」）も使わず、「下のボタンで反映できます」と案内したうえで、変更後の栄養や費用への影響を短く添える。",
+  meal: "管理栄養士。その日に食べた記録と目標を比較し、栄養の目標案や不足分を提案する。合計が途中の値のときは不足・過剰を断定しない。あなた自身は記録や目標を変更できない。変更の依頼には、完了した言い方（「追加しました」）も指示の言い方（「追加してください」）も使わず、「下のボタンで反映できます」と案内したうえで、変更後の栄養や費用への影響を短く添える。",
   beauty: "美容アドバイザー。睡眠・食事・活動・検診も参照し、「続けること」「追加候補」「見直すこと」を提案する。商品は根拠がないものを断定しない。",
 };
 type ChatRow = { id: string; role: "user" | "assistant"; content: string; meta_json: string | null; created_at: string };
@@ -322,10 +317,10 @@ routes.post("/chat/:channel", async (c) => {
 
   let roleText = ROLE_TEXT[ch];
   if (ch === "meal") {
-    const s = await mealSummary(c.env, user.id);
-    const items = await all<MealRow>(c.env.DB, "SELECT id,slot,food_name,amount,unit,nutrition_json,nutrition_source,cost_per_serving FROM meal_routines WHERE user_id=?", user.id);
-    roleText += "\nルーティンの追加・変更・削除や目標の変更を頼まれたときは、提案内容が返信の下にカードで表示され、利用者がボタンを押すと反映されます。例:「朝食にゆで卵2個（約140kcal・たんぱく質12g）を追加する提案です。下のボタンで反映できます。」";
-    roleText += `\n食事ルーティン: ${JSON.stringify(items.map(mealOut).map(({ nutrition_json: _n, ...m }) => m))}\n集計: ${JSON.stringify(s.nutrition.totals)} partial=${s.nutrition.partial}\n目標: ${JSON.stringify(s.targets)}`;
+    const log = await dayLog(c.env, user.id, jstDate());
+    const foods = await all<{ name: string; amount: number | null; unit: string | null }>(c.env.DB, "SELECT name,amount,unit FROM meal_foods WHERE user_id=? AND archived_at IS NULL ORDER BY use_count DESC LIMIT 30", user.id);
+    roleText += "\n記録の追加・変更・削除や目標の変更を頼まれたときは、提案内容が返信の下にカードで表示され、利用者がボタンを押すと反映されます。例:「ゆで卵2個（約140kcal・たんぱく質12g）を今日の記録に追加する提案です。下のボタンで反映できます。」";
+    roleText += `\n今日の記録: ${JSON.stringify(log.entries.map((e) => ({ food_name: e.food_name, amount: e.amount, unit: e.unit, nutrition: e.nutrition })))}\n集計: ${JSON.stringify(log.summary.nutrition.totals)} partial=${log.summary.nutrition.partial}\n目標: ${JSON.stringify(log.summary.targets)}\nよく食べるもの: ${JSON.stringify(foods)}`;
   } else if (ch === "beauty") {
     const items = await all(c.env.DB, "SELECT name,product,timing,purpose FROM beauty_routines WHERE user_id=?", user.id);
     const policy = await getSetting(c.env, user.id, "beauty_policy", null);
@@ -337,27 +332,28 @@ routes.post("/chat/:channel", async (c) => {
   let proposal: unknown = null;
   if (reply.provider !== "fallback") {
     if (ch === "meal") {
-      const existing = (await all<MealRow>(c.env.DB, "SELECT * FROM meal_routines WHERE user_id=?", user.id)).map(mealOut);
+      const day = jstDate();
+      const existing = await all<{ id: string; food_name: string; amount: number | null; unit: string | null; nutrition_json: string | null }>(
+        c.env.DB, "SELECT id,food_name,amount,unit,nutrition_json FROM meal_entries WHERE user_id=? AND day=?", user.id, day);
       const r = await chatJson<Record<string, unknown>>(c.env, [
         { role: "system", content: [
           "あなたは管理栄養士です。直前の会話で利用者が求めた、または合意した変更だけを JSON のみで返します。推測で変更を足さないでください。",
-          '形式: {"targets": {栄養キー: 1日の目標値} | null, "routines": [操作], "estimates": [{"food_name": 登録名, "nutrition": {栄養キー: 数値}}]}',
-          '操作: {"op":"add","slot":"breakfast|lunch|dinner|snack","food_name":名前,"amount":数値|null,"unit":"g|個|杯など"|null,"cost_per_serving":円|null,"nutrition":{栄養キー:1回分の値}|null}',
-          '      {"op":"update","id":既存ID,"changes":{"slot"?,"food_name"?,"amount"?,"unit"?,"cost_per_serving"?,"nutrition"?}}',
+          '形式: {"targets": {栄養キー: 1日の目標値} | null, "entries": [操作]}',
+          '操作: {"op":"add","food_name":名前,"amount":数値|null,"unit":"g|個|杯など"|null,"cost":円|null,"nutrition":{栄養キー:その量の値}|null,"save_as_food":true}',
+          '      {"op":"update","id":既存ID,"changes":{"food_name"?,"amount"?,"unit"?,"cost"?,"nutrition"?}}',
           '      {"op":"remove","id":既存ID}',
-          `栄養キーは ${NUTRIENT_KEYS.join(", ")}。既存ルーティン(ID付き): ${JSON.stringify(existing.map((m) => ({ id: m.id, slot: m.slot, food_name: m.food_name, amount: m.amount, unit: m.unit })))}`,
-          '変更がなければ {"targets": null, "routines": [], "estimates": []}。',
+          'entries は「今日食べた記録」への操作です。save_as_food は「よく食べるもの」にも登録する場合 true。',
+          `栄養キーは ${NUTRIENT_KEYS.join(", ")}。今日の記録(ID付き): ${JSON.stringify(existing.map((m) => ({ id: m.id, food_name: m.food_name, amount: m.amount, unit: m.unit })))}`,
+          '変更がなければ {"targets": null, "entries": []}。',
         ].join("\n") },
         // Only the latest exchange: older turns slow the call down and bring back changes already applied.
         { role: "user", content: `依頼: ${message}` },
         { role: "assistant", content: reply.text.slice(0, 1500) },
         { role: "user", content: "この依頼と返答に含まれる変更だけをJSONで。" },
-      ], { targets: null, routines: [], estimates: [] });
-      const norm = normalizeMealProposal(r.data, existing.map((m) => ({ id: m.id, slot: m.slot, food_name: m.food_name, amount: m.amount, nutrition: m.nutrition })));
-      const raw = (r.data ?? {}) as { estimates?: { food_name?: string; nutrition?: unknown }[] };
-      const estimates = Array.isArray(raw.estimates) ? raw.estimates.map((e) => ({ food_name: String(e?.food_name ?? ""), nutrition: parseNutrition(JSON.stringify(e?.nutrition ?? {})) })).filter((e) => e.food_name && e.nutrition && existing.some((m) => m.food_name === e.food_name)) : [];
-      if (norm.targets || norm.routines.length || estimates.length) proposal = { targets: norm.targets, routines: norm.routines, estimates };
-      else if (!r.parsed) proposal = { error: "変更内容を読み取れませんでした。もう一度、短く具体的に指示してください（例: 朝にゆで卵2個を追加）。", targets: null, routines: [], estimates: [] };
+      ], { targets: null, entries: [] });
+      const norm = normalizeMealProposal(r.data, existing.map((m) => ({ id: m.id, food_name: m.food_name, amount: m.amount, nutrition: parseNutrition(m.nutrition_json) })));
+      if (norm.targets || norm.entries.length) proposal = { targets: norm.targets, entries: norm.entries, day };
+      else if (!r.parsed) proposal = { error: "変更内容を読み取れませんでした。もう一度、短く具体的に指示してください（例: ゆで卵2個を食べた）。", targets: null, entries: [] };
     } else if (ch === "beauty") {
       const r = await chatJson<{ keep?: string[]; add?: string[]; review?: string[] }>(c.env, [
         { role: "system", content: "あなたは美容アドバイザーです。直前の会話の提案を JSON のみで返します。形式: {\"keep\": [続けること], \"add\": [追加候補], \"review\": [見直すこと]}。各要素は短い日本語。提案がなければ空配列。" },

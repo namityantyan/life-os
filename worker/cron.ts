@@ -47,7 +47,7 @@ async function maybeMorning(env: Env, userId: string) {
   if (include.oura && ctx.health.oura_is_today && ctx.health.oura) lines.push(`睡眠 ${ctx.health.oura.sleep_score ?? "—"} / 回復 ${ctx.health.oura.readiness_score ?? "—"}`);
   if (include.events && ctx.planner.events_today.length) lines.push(`予定 ${ctx.planner.events_today.map((e) => e.title).join("、")}`);
   if (include.tasks) lines.push(`未完了タスク ${ctx.planner.tasks_open}件`);
-  if (include.meals && ctx.health.meal_summary?.energy_kcal) lines.push(`食事ルーティン ${Math.round(ctx.health.meal_summary.energy_kcal)} kcal`);
+  if (include.meals && ctx.health.meal_summary?.energy_kcal) lines.push(`昨日の食事 ${Math.round(ctx.health.meal_summary.energy_kcal)} kcal`);
   await notify(env, userId, { kind: "morning", title: "おはようございます", body: lines.join("\n"), url: "/" });
 }
 

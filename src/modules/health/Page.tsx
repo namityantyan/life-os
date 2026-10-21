@@ -6,6 +6,8 @@ import {
   EmptyState, ErrorBanner, Stagger, Item, ChatPanel, ChartTip, Table, Th, Td, trCls, useChartColors, useToast, cx, type ChatMsg,
 } from "@/components/ui";
 import { api, useApi, fmtNum, fmtYen, fmtDate, fmtDateTime, todayJst } from "@/lib/api";
+import { MealTab } from "./MealTab";
+import { EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, numOrNull as sharedNumOrNull, type ChatItem, type Nutrition } from "./shared";
 import type { PressureAssessment, PressureLevel } from "@shared/types";
 
 /* ======================================================================
@@ -19,26 +21,10 @@ type Overview = {
   weather: { location: { name: string }; pressure: PressureAssessment; fetched_at: string; series: { time: string; hpa: number | null }[] } | null;
   weather_configured: boolean; suggestion: string; pressure_logs: PressureLog[]; personal: Personal;
 };
-type Nutrition = Record<string, number>;
-type Meal = { id: string; slot: Slot; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: "recorded" | "estimated" | null; cost_per_serving: number | null };
-type MealsRes = { items: Meal[]; summary: { nutrition: { totals: Record<string, number | null>; partial: boolean; item_count: number; with_nutrition: number; estimated_count: number; partial_keys: string[] }; cost: { total: number | null; counted: number; missing: number }; targets: Nutrition } };
-type Slot = "breakfast" | "lunch" | "dinner" | "snack";
 type Beauty = { id: string; name: string; product: string | null; timing: string | null; purpose: string | null };
 type Policy = { keep: string[]; add: string[]; review: string[]; note?: string; updated_at?: string } | null;
 type Checkup = { id: string; checkup_date: string; notes: string | null } & Record<CheckupField, number | null>;
-type ChatItem = ChatMsg & { id?: string; proposal?: any; applied?: Record<string, unknown> | null };
 
-const SLOT_LABEL: Record<Slot, string> = { breakfast: "朝", lunch: "昼", dinner: "夜", snack: "間食" };
-const SLOTS: Slot[] = ["breakfast", "lunch", "dinner", "snack"];
-const MAIN_NUTRIENTS: { key: string; label: string; unit: string }[] = [
-  { key: "energy_kcal", label: "エネルギー", unit: "kcal" }, { key: "protein_g", label: "たんぱく質", unit: "g" }, { key: "fat_g", label: "脂質", unit: "g" },
-  { key: "carbs_g", label: "炭水化物", unit: "g" }, { key: "fiber_g", label: "食物繊維", unit: "g" }, { key: "salt_g", label: "食塩相当量", unit: "g" },
-];
-const EXTRA_NUTRIENTS: { key: string; label: string; unit: string }[] = [
-  { key: "calcium_mg", label: "カルシウム", unit: "mg" }, { key: "iron_mg", label: "鉄", unit: "mg" }, { key: "magnesium_mg", label: "マグネシウム", unit: "mg" }, { key: "zinc_mg", label: "亜鉛", unit: "mg" }, { key: "potassium_mg", label: "カリウム", unit: "mg" },
-  { key: "vitamin_a_ug", label: "ビタミンA", unit: "µg" }, { key: "vitamin_b1_mg", label: "ビタミンB1", unit: "mg" }, { key: "vitamin_b2_mg", label: "ビタミンB2", unit: "mg" }, { key: "vitamin_b6_mg", label: "ビタミンB6", unit: "mg" }, { key: "vitamin_b12_ug", label: "ビタミンB12", unit: "µg" },
-  { key: "vitamin_c_mg", label: "ビタミンC", unit: "mg" }, { key: "vitamin_d_ug", label: "ビタミンD", unit: "µg" }, { key: "vitamin_e_mg", label: "ビタミンE", unit: "mg" }, { key: "folate_ug", label: "葉酸", unit: "µg" },
-];
 const CHECKUP_FIELDS = [
   { key: "ldl", label: "LDL", unit: "mg/dL" }, { key: "hdl", label: "HDL", unit: "mg/dL" }, { key: "tg", label: "中性脂肪", unit: "mg/dL" }, { key: "total_chol", label: "総コレステロール", unit: "mg/dL" },
   { key: "hba1c", label: "HbA1c", unit: "%" }, { key: "fasting_glucose", label: "空腹時血糖", unit: "mg/dL" }, { key: "bp_sys", label: "血圧（上）", unit: "mmHg" }, { key: "bp_dia", label: "血圧（下）", unit: "mmHg" },
@@ -48,7 +34,7 @@ type CheckupField = (typeof CHECKUP_FIELDS)[number]["key"];
 
 const fmtSleep = (sec: number | null | undefined) => { if (sec == null) return "—"; const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return `${h}:${String(m).padStart(2, "0")}`; };
 const fmtDelta = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)} hPa`);
-const numOrNull = (s: string) => (s.trim() === "" ? null : Number.isFinite(Number(s)) ? Number(s) : null);
+const numOrNull = sharedNumOrNull;
 const LEVEL: Record<PressureLevel, { label: string; tone: "green" | "orange" | "red" | "neutral" }> = { stable: { label: "安定", tone: "green" }, caution: { label: "注意", tone: "orange" }, strong: { label: "強い変化", tone: "red" }, unknown: { label: "不明", tone: "neutral" } };
 
 /* ======================================================================
@@ -235,280 +221,6 @@ function PressureLogModal({ log, onClose, onSaved }: { log: PressureLog | null; 
 /* ======================================================================
    食事
    ====================================================================== */
-/* ---------- Meal chat proposal: review and apply routine changes / target changes ---------- */
-type MealOp =
-  | { op: "add"; slot: Slot; food_name: string; amount: number | null; unit: string | null; cost_per_serving: number | null; nutrition: Nutrition | null }
-  | { op: "update"; id: string; food_name: string; changes: Partial<{ slot: Slot; food_name: string; amount: number | null; unit: string | null; cost_per_serving: number | null; nutrition: Nutrition | null }> }
-  | { op: "remove"; id: string; food_name: string };
-const ALL_NUTRIENTS = [...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS];
-const nutrientLabel = (k: string) => ALL_NUTRIENTS.find((n) => n.key === k) ?? { key: k, label: k, unit: "" };
-const amountText = (a: number | null | undefined, u: string | null | undefined) => (a == null ? "量未設定" : `${fmtNum(a, 1)}${u ?? ""}`);
-const kcalText = (n: Nutrition | null | undefined) => (n?.energy_kcal != null ? `約${fmtNum(n.energy_kcal)}kcal` : null);
-
-function MealProposalCard({ item, meals, targets, onApplied, onEstimates, applyingEstimates }: {
-  item: ChatItem; meals: Meal[]; targets: Nutrition; onApplied: (r: Record<string, unknown>) => void;
-  onEstimates: (e: { food_name: string; nutrition: Nutrition }[]) => void; applyingEstimates: boolean;
-}) {
-  const toast = useToast();
-  const p = item.proposal as { routines?: MealOp[]; targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[]; error?: string };
-  const ops = p.routines ?? [];
-  const targetRows = Object.entries(p.targets ?? {}).filter(([k, v]) => targets[k] !== v);
-  const [sel, setSel] = useState<Set<number>>(() => new Set(ops.map((_, i) => i)));
-  const [useTargets, setUseTargets] = useState(targetRows.length > 0);
-  const [busy, setBusy] = useState(false);
-  const applied = item.applied;
-  const count = sel.size + (useTargets ? 1 : 0);
-  const describe = (op: MealOp) => {
-    if (op.op === "add") return { tag: "追加", tone: "green" as const, text: `${SLOT_LABEL[op.slot]}・${op.food_name} ${amountText(op.amount, op.unit)}`, sub: [kcalText(op.nutrition), op.nutrition ? "栄養は推定" : "栄養未計算", op.cost_per_serving != null ? fmtYen(op.cost_per_serving) : null].filter(Boolean).join("・") };
-    if (op.op === "remove") { const cur = meals.find((m) => m.id === op.id); return { tag: "削除", tone: "red" as const, text: `${cur ? SLOT_LABEL[cur.slot] + "・" : ""}${op.food_name}`, sub: cur ? amountText(cur.amount, cur.unit) : "" }; }
-    const cur = meals.find((m) => m.id === op.id); const ch = op.changes; const parts: string[] = [];
-    if (ch.slot) parts.push(`${cur ? SLOT_LABEL[cur.slot] : "?"} → ${SLOT_LABEL[ch.slot]}`);
-    if (ch.food_name) parts.push(`名前 → ${ch.food_name}`);
-    if (ch.amount !== undefined) parts.push(`${amountText(cur?.amount, cur?.unit)} → ${amountText(ch.amount, ch.unit ?? cur?.unit)}`);
-    if (ch.cost_per_serving !== undefined) parts.push(`費用 → ${ch.cost_per_serving == null ? "未入力" : fmtYen(ch.cost_per_serving)}`);
-    if (ch.nutrition) parts.push(`栄養 → ${kcalText(ch.nutrition) ?? "更新"}（推定）`);
-    else if (ch.amount != null && cur?.nutrition) parts.push("栄養は量に合わせて換算（推定）");
-    return { tag: "変更", tone: "accent" as const, text: `${cur ? SLOT_LABEL[cur.slot] + "・" : ""}${op.food_name}`, sub: parts.join("、") };
-  };
-  const apply = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post<{ added: number; updated: number; removed: number; targets: boolean; skipped: number }>("/health/meals/apply-proposal", {
-        message_id: item.id, routines: ops.filter((_, i) => sel.has(i)), targets: useTargets ? Object.fromEntries(targetRows) : null,
-      });
-      const msg = [r.added && `追加${r.added}件`, r.updated && `変更${r.updated}件`, r.removed && `削除${r.removed}件`, r.targets && "目標を更新"].filter(Boolean).join("・");
-      toast(msg ? `反映しました（${msg}）` : "反映できる変更がありませんでした", msg ? "success" : "neutral");
-      if (r.skipped) toast(`${r.skipped}件は現在のルーティンと合わないため反映しませんでした`);
-      onApplied({ ...r, at: new Date().toISOString() });
-    } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setBusy(false); }
-  };
-  if (p.error) return <div className="mt-2 rounded-[var(--radius-lg)] bg-orange/10 p-3 text-sm text-label-2" data-testid="meal-proposal-error">{p.error}</div>;
-  return (
-    <div className="mt-2 rounded-[var(--radius-lg)] bg-subtle p-3 space-y-2 text-sm" data-testid="meal-proposal">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">提案された変更</span>
-        {applied ? <Badge tone="green"><span data-testid="meal-proposal-applied">反映済み</span></Badge> : null}
-      </div>
-      {ops.length > 0 && (
-        <ul className="space-y-1.5" data-testid="meal-proposal-ops">
-          {ops.map((op, i) => { const d = describe(op); return (
-            <li key={i}>
-              <label className={cx("flex items-start gap-2", applied && "opacity-60")}>
-                <input type="checkbox" className="mt-1 accent-[var(--accent)] size-4 shrink-0" checked={sel.has(i)} disabled={!!applied || busy}
-                  onChange={(e) => setSel((s0) => { const n = new Set(s0); e.target.checked ? n.add(i) : n.delete(i); return n; })} aria-label={`${d.tag} ${d.text}`} />
-                <span className="min-w-0"><Badge tone={d.tone} className="mr-1.5">{d.tag}</Badge><span>{d.text}</span>{d.sub && <span className="block text-xs text-label-2 mt-0.5">{d.sub}</span>}</span>
-              </label>
-            </li>
-          ); })}
-        </ul>
-      )}
-      {targetRows.length > 0 && (
-        <div className={cx("space-y-1", applied && "opacity-60")}>
-          <label className="flex items-center gap-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={useTargets} disabled={!!applied || busy} onChange={(e) => setUseTargets(e.target.checked)} aria-label="目標値を変更する" /><Badge tone="purple">目標</Badge><span>1日の目標値を変更</span></label>
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 gap-y-0.5 pl-6 text-xs tabular" data-testid="meal-proposal-targets">
-            {targetRows.map(([k, v]) => { const n = nutrientLabel(k); return (
-              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(targets[k], 1) : "未設定"}</span><span className="text-label-3">→</span><span className="text-right font-medium">{fmtNum(v, 1)}{n.unit}</span></div>
-            ); })}
-          </div>
-        </div>
-      )}
-      {!applied && (ops.length > 0 || targetRows.length > 0) && (
-        <Button size="sm" variant="primary" className="w-full" loading={busy} disabled={count === 0} onClick={apply} data-testid="meal-proposal-apply">選んだ変更を反映（{count}件）</Button>
-      )}
-      {p.estimates && p.estimates.length > 0 && (
-        <Button size="sm" variant="tinted" className="w-full" loading={applyingEstimates} onClick={() => onEstimates(p.estimates!)} data-testid="apply-estimates">栄養の推定値を反映（{p.estimates.length}件）</Button>
-      )}
-    </div>
-  );
-}
-
-function MealTab() {
-  const toast = useToast();
-  const meals = useApi<MealsRes>("/health/meals");
-  const chat = useChat("meal");
-  const [editing, setEditing] = useState<Meal | "new" | null>(null);
-  const [targetsOpen, setTargetsOpen] = useState(false);
-  const [estimating, setEstimating] = useState<string | null>(null);
-  const [showExtra, setShowExtra] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const reload = () => meals.reload(true);
-  if (meals.loading && !meals.data) return <PageSkeleton cards={3} />;
-  const d = meals.data; if (!d) return <div><ErrorBanner message={meals.error} onRetry={() => meals.reload()} testId="health-error" /><EmptyState title="食事を読み込めませんでした" /></div>;
-  const { totals, partial, item_count, with_nutrition, estimated_count } = d.summary.nutrition;
-  const cost = d.summary.cost; const targets = d.summary.targets;
-
-  const estimate = async (m: Meal) => {
-    setEstimating(m.id);
-    try {
-      let r = await api.post<{ applied: boolean; reason?: string; estimate: Nutrition | null }>(`/health/meals/${m.id}/estimate`, {});
-      if (!r.applied && r.reason === "recorded") {
-        if (!confirm(`「${m.food_name}」には記録済みの栄養値があります。推定値で上書きしますか？`)) return;
-        r = await api.post(`/health/meals/${m.id}/estimate`, { confirm: true });
-      }
-      if (r.applied) { toast("推定値を保存しました", "success"); reload(); }
-      else if (r.reason === "ai_unavailable") toast("AIに接続できないため推定できません", "error");
-    } catch (e: any) { toast(e?.message ?? "推定に失敗しました", "error"); } finally { setEstimating(null); }
-  };
-  const del = async (m: Meal) => { if (!confirm(`「${m.food_name}」を削除しますか？`)) return; try { await api.del(`/health/meals/${m.id}`); toast("削除しました"); reload(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); } };
-  const applyTargets = async (t: Nutrition) => { setApplying(true); try { await api.put("/health/targets", t); toast("目標を保存しました", "success"); reload(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setApplying(false); } };
-  const applyEstimates = async (ests: { food_name: string; nutrition: Nutrition }[]) => {
-    setApplying(true);
-    try {
-    let n = 0;
-    for (const e of ests) {
-      const m = d.items.find((x) => x.food_name === e.food_name); if (!m) continue;
-      let r = await api.post<{ applied: boolean; reason?: string }>(`/health/meals/${m.id}/apply-estimate`, { nutrition: e.nutrition });
-      if (!r.applied && r.reason === "recorded" && confirm(`「${m.food_name}」の記録済みの値を推定値で上書きしますか？`)) r = await api.post(`/health/meals/${m.id}/apply-estimate`, { nutrition: e.nutrition, confirm: true });
-      if (r.applied) n++;
-    }
-    toast(n ? `${n}件に反映しました` : "反映できる項目がありませんでした", n ? "success" : "neutral"); reload();
-    } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setApplying(false); }
-  };
-
-  return (
-    <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
-      <div className="xl:col-span-2 space-y-4">
-        <Card as="section" className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold tracking-tight">1日分の栄養</h2>
-              {item_count > 0 && (partial ? <Badge tone="orange"><span data-testid="nutrition-partial">途中の値（{with_nutrition}/{item_count}件が計算済み）</span></Badge> : <Badge tone="green"><span data-testid="nutrition-complete">全件計算済み</span></Badge>)}
-              {estimated_count > 0 && <Badge>推定を含む {estimated_count}件</Badge>}
-            </div>
-            <Button size="sm" onClick={() => setTargetsOpen(true)} data-testid="targets-edit">目標を編集</Button>
-          </div>
-          {item_count === 0 ? <p className="text-sm text-label-3">ルーティンを登録すると集計します。</p> : (
-            <div className="space-y-2">
-              {(showExtra ? [...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS] : MAIN_NUTRIENTS).map((n) => <NutrientBar key={n.key} label={n.label} unit={n.unit} value={totals[n.key] ?? null} target={targets[n.key] ?? null} partial={partial} />)}
-              <Button size="sm" variant="ghost" aria-expanded={showExtra} onClick={() => setShowExtra((v) => !v)}>{showExtra ? "主要項目だけ表示" : "ミネラル・ビタミンも表示"}</Button>
-              {partial && <p className="text-xs text-label-2">栄養が未計算の食品があるため、合計は途中の値です。不足・過剰は断定しません。</p>}
-            </div>
-          )}
-          <div className="flex items-baseline gap-2 pt-1">
-            <span className="text-xs text-label-2 font-medium">1日の食費（概算）</span>
-            <span className="text-lg font-semibold tabular" data-testid="meal-cost-total">{cost.total == null ? "未入力" : fmtYen(cost.total)}</span>
-            {cost.missing > 0 && <span className="text-xs text-label-3">費用未入力 {cost.missing}件（無料とは扱いません）</span>}
-          </div>
-        </Card>
-
-        <Section title="ルーティン" action={<Button variant="primary" size="sm" onClick={() => setEditing("new")} data-testid="meal-add">追加</Button>}>
-          {d.items.length === 0 ? <Card><EmptyState title="ルーティンがありません" hint="普段食べるものを登録すると、1日分の栄養と食費を集計します。" /></Card> : (
-            <div className="space-y-3">
-              {SLOTS.map((slot) => { const list = d.items.filter((m) => m.slot === slot); if (!list.length) return null; return (
-                <Card key={slot} padded={false} className="px-5 py-3">
-                  <div className="text-xs font-medium text-label-2 mb-1">{SLOT_LABEL[slot]}</div>
-                  <Stagger className="divide-y divide-separator">
-                    {list.map((m) => (
-                      <Item key={m.id} className="flex items-center gap-3 py-2.5">
-                        <div className="flex-1 min-w-0" data-testid="meal-item">
-                          <div className="flex items-center gap-2 flex-wrap"><span className="font-medium truncate">{m.food_name}</span>
-                            {m.amount != null && <span className="text-sm text-label-2 tabular">{fmtNum(m.amount, 1)}{m.unit ?? ""}</span>}
-                            {m.nutrition_source === "recorded" ? <Badge tone="green">記録</Badge> : m.nutrition_source === "estimated" ? <Badge tone="accent">推定</Badge> : <Badge>栄養未計算</Badge>}
-                          </div>
-                          <div className="text-xs text-label-3 tabular">{m.nutrition ? `${fmtNum(m.nutrition.energy_kcal)} kcal・P ${fmtNum(m.nutrition.protein_g)}・F ${fmtNum(m.nutrition.fat_g)}・C ${fmtNum(m.nutrition.carbs_g)}` : "—"}・{m.cost_per_serving == null ? "費用未入力" : fmtYen(m.cost_per_serving)}</div>
-                        </div>
-                        <Button size="sm" variant="ghost" onClick={() => estimate(m)} loading={estimating === m.id} aria-label={`${m.food_name}の栄養をAIで推定`} data-testid="meal-estimate">AI推定</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(m)} aria-label={`${m.food_name}を編集`}>編集</Button>
-                        <IconButton label={`${m.food_name}を削除`} className="text-red hover:text-red" onClick={() => del(m)}>✕</IconButton>
-                      </Item>
-                    ))}
-                  </Stagger>
-                </Card>
-              ); })}
-            </div>
-          )}
-        </Section>
-      </div>
-      <Card as="section" className="xl:col-span-1 flex flex-col xl:sticky xl:top-20 self-start w-full">
-        <h2 className="text-lg font-semibold tracking-tight mb-2">食事チャット</h2>
-        <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="例: 朝にヨーグルト200gを追加して / たんぱく質の目標を120gに"
-          emptyHint="ルーティンと目標をもとに相談できます。追加・変更・削除や目標の変更を頼むと、反映できる提案が出ます。"
-          renderExtra={(m) => {
-            const it = m as ChatItem;
-            return it.proposal && (it.proposal.error || it.proposal.routines?.length || it.proposal.targets || it.proposal.estimates?.length)
-              ? <MealProposalCard item={it} meals={d.items} targets={targets} onApplied={(res) => { chat.markApplied(it.id!, res); reload(); }} onEstimates={applyEstimates} applyingEstimates={applying} />
-              : null;
-          }} />
-      </Card>
-      <MealModal meal={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />
-      <TargetsModal open={targetsOpen} targets={targets} onClose={() => setTargetsOpen(false)} onSaved={() => { setTargetsOpen(false); reload(); }} />
-    </div>
-  );
-}
-
-function NutrientBar({ label, unit, value, target, partial }: { label: string; unit: string; value: number | null; target: number | null; partial: boolean }) {
-  const ratio = value != null && target ? Math.min(1, value / target) : 0;
-  return (
-    <div className="grid grid-cols-[7rem_1fr_auto] items-center gap-3 text-sm">
-      <span className="text-label-2">{label}</span>
-      <div className="h-1.5 rounded-full bg-fill overflow-hidden"><motion.div className={cx("h-full rounded-full", partial ? "bg-label-3" : "bg-accent")} initial={{ width: 0 }} animate={{ width: `${ratio * 100}%` }} transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }} /></div>
-      <span className="tabular text-right whitespace-nowrap">{value == null ? "—" : fmtNum(value, unit === "g" || unit === "mg" ? 1 : 0)}{target != null ? <span className="text-label-3"> / {fmtNum(target, 0)}</span> : null} <span className="text-label-3 text-xs">{unit}</span></span>
-    </div>
-  );
-}
-
-function MealModal({ meal, onClose, onSaved }: { meal: Meal | "new" | null; onClose: () => void; onSaved: () => void }) {
-  const toast = useToast();
-  const [f, setF] = useState({ slot: "breakfast" as Slot, food_name: "", amount: "", unit: "", cost: "" });
-  const [n, setN] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    if (meal && meal !== "new") { setF({ slot: meal.slot, food_name: meal.food_name, amount: meal.amount != null ? String(meal.amount) : "", unit: meal.unit ?? "", cost: meal.cost_per_serving != null ? String(meal.cost_per_serving) : "" }); setN(Object.fromEntries(Object.entries(meal.nutrition ?? {}).map(([k, v]) => [k, String(v)]))); }
-    else { setF({ slot: "breakfast", food_name: "", amount: "", unit: "", cost: "" }); setN({}); }
-  }, [meal]);
-  const save = async () => {
-    if (!f.food_name.trim()) return;
-    const nutrition: Nutrition = {}; for (const [k, v] of Object.entries(n)) { const x = numOrNull(v); if (x != null) nutrition[k] = x; }
-    const body: any = { slot: f.slot, food_name: f.food_name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost_per_serving: numOrNull(f.cost) };
-    const isEdit = meal && meal !== "new";
-    const touchedNutrition = Object.keys(nutrition).length > 0 || (isEdit && meal.nutrition && Object.keys(nutrition).length === 0 && meal.nutrition_source === "recorded");
-    if (!isEdit ? Object.keys(nutrition).length > 0 : touchedNutrition && JSON.stringify(nutrition) !== JSON.stringify(meal.nutrition ?? {})) body.nutrition = Object.keys(nutrition).length ? nutrition : null;
-    setSaving(true);
-    try { if (isEdit) await api.put(`/health/meals/${meal.id}`, body); else await api.post("/health/meals", body); toast("保存しました", "success"); onSaved(); }
-    catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
-  };
-  return (
-    <Modal open={Boolean(meal)} onClose={onClose} title={meal === "new" ? "ルーティンを追加" : "ルーティンを編集"} footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} loading={saving} disabled={!f.food_name.trim()} data-testid="meal-save">保存</Button></>}>
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="タイミング"><Select value={f.slot} onChange={(e) => setF({ ...f, slot: e.target.value as Slot })} data-testid="meal-slot">{SLOTS.map((s) => <option key={s} value={s}>{SLOT_LABEL[s]}</option>)}</Select></Field>
-          <Field label="1回分の費用（円）" hint="未入力は無料とは扱いません"><Input inputMode="decimal" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} placeholder="未入力" data-testid="meal-cost" /></Field>
-        </div>
-        <Field label="食品"><Input value={f.food_name} onChange={(e) => setF({ ...f, food_name: e.target.value })} placeholder="例: 鶏むね肉のサラダ" data-testid="meal-name" /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="量"><Input inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="150" /></Field>
-          <Field label="単位"><Input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} placeholder="g / 個 / 杯" /></Field>
-        </div>
-        <details className="rounded-[var(--radius-md)] bg-subtle p-3">
-          <summary className="text-sm font-medium cursor-pointer">栄養を手入力（記録値）</summary>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
-            {[...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS].map((x) => <Field key={x.key} label={`${x.label} (${x.unit})`}><Input inputMode="decimal" value={n[x.key] ?? ""} onChange={(e) => setN({ ...n, [x.key]: e.target.value })} /></Field>)}
-          </div>
-          <p className="text-xs text-label-3 mt-2">空欄のままなら「AI推定」で埋められます。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
-        </details>
-      </div>
-    </Modal>
-  );
-}
-
-function TargetsModal({ open, targets, onClose, onSaved }: { open: boolean; targets: Nutrition; onClose: () => void; onSaved: () => void }) {
-  const toast = useToast();
-  const [t, setT] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { if (open) setT(Object.fromEntries(Object.entries(targets).map(([k, v]) => [k, String(v)]))); }, [open, targets]);
-  const save = async () => {
-    const out: Nutrition = {}; for (const [k, v] of Object.entries(t)) { const x = numOrNull(v); if (x != null) out[k] = x; }
-    setSaving(true); try { await api.put("/health/targets", out); toast("目標を保存しました", "success"); onSaved(); } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
-  };
-  return (
-    <Modal open={open} onClose={onClose} title="1日の栄養目標" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} loading={saving} data-testid="targets-save">保存</Button></>}>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {[...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS].map((x) => <Field key={x.key} label={`${x.label} (${x.unit})`}><Input inputMode="decimal" value={t[x.key] ?? ""} onChange={(e) => setT({ ...t, [x.key]: e.target.value })} placeholder="未設定" /></Field>)}
-      </div>
-    </Modal>
-  );
-}
-
 /* ======================================================================
    美容
    ====================================================================== */

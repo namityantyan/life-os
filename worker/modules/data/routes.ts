@@ -16,7 +16,7 @@ export const EXPORT_VERSION = 1;
 export const EXPORT_TABLES = [
   "settings", "notifications",
   "planner_items", "ideas", "notes",
-  "oura_daily", "meal_routines", "beauty_routines", "checkups", "pressure_logs", "chat_messages",
+  "oura_daily", "meal_routines", "meal_foods", "meal_sets", "meal_entries", "beauty_routines", "checkups", "pressure_logs", "chat_messages",
   "training_sessions", "training_sets",
   "asset_accounts", "asset_balances", "card_transactions", "card_statements",
   "fx_connector_state", "fx_signals", "fx_trades", "fx_trade_events",

@@ -7,7 +7,7 @@ type ImportResult = { ok: boolean; mode: string; inserted: Record<string, number
 
 const TABLE_LABELS: Record<string, string> = {
   settings: "設定", notifications: "通知", planner_items: "予定・タスク", ideas: "アイデア", notes: "メモ",
-  oura_daily: "Oura 日次", meal_routines: "食事ルーティン", beauty_routines: "美容ルーティン", checkups: "健診", pressure_logs: "気圧の体調ログ", chat_messages: "相談ログ",
+  oura_daily: "Oura 日次", meal_routines: "食事セットの中身", meal_foods: "よく食べるもの", meal_sets: "食事セット", meal_entries: "食事の記録", beauty_routines: "美容ルーティン", checkups: "健診", pressure_logs: "気圧の体調ログ", chat_messages: "相談ログ",
   training_sessions: "トレーニング", training_sets: "セット", asset_accounts: "資産口座", asset_balances: "残高履歴", card_transactions: "カード明細", card_statements: "カード請求",
   fx_connector_state: "FX接続状態", fx_signals: "FXシグナル", fx_trades: "FX取引", fx_trade_events: "FX取引イベント", invoices: "請求書", royalty_mails: "著作権明細メール",
   backup_runs: "バックアップ履歴", requests: "リクエスト", discord_links: "Discord連携", discord_channels: "Discordチャンネル",

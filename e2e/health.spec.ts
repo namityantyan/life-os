@@ -11,7 +11,7 @@ test.beforeEach(async ({ authed: page }) => {
 test("tabs switch between 体調 / 食事 / 美容 / 検診", async ({ authed: page }) => {
   await expect(page.getByTestId("oura-card")).toBeVisible();
   await page.getByRole("tab", { name: "食事" }).click();
-  await expect(page.getByTestId("meal-add")).toBeVisible();
+  await expect(page.getByTestId("entry-add")).toBeVisible();
   await page.getByRole("tab", { name: "美容" }).click();
   await expect(page.getByTestId("beauty-add")).toBeVisible();
   await page.getByRole("tab", { name: "検診" }).click();
@@ -20,24 +20,6 @@ test("tabs switch between 体調 / 食事 / 美容 / 検診", async ({ authed: p
   await expect(page.getByTestId("pressure-card")).toBeVisible({ timeout: 30_000 });
 });
 
-test("meal routine: add an item without nutrition and totals are marked partial; cost stays 未入力", async ({ authed: page }) => {
-  const name = `e2e食品 ${uniq()}`;
-  await page.getByRole("tab", { name: "食事" }).click();
-  await page.getByTestId("meal-add").click();
-  await page.getByTestId("meal-slot").selectOption("lunch");
-  await page.getByTestId("meal-name").fill(name);
-  await page.getByTestId("meal-save").click();
-  await expect(page.getByTestId("meal-item").filter({ hasText: name })).toBeVisible();
-  await expect(page.getByTestId("nutrition-partial")).toBeVisible();
-  // this item has no cost; the summary must not treat it as 0 → "未入力" count shown
-  await expect(page.getByText(/費用未入力 \d+件/)).toBeVisible();
-
-  // API-level: summary reflects partial=true and the item counts
-  const res = await page.request.get("/api/health/meals/summary");
-  const j = await res.json();
-  expect(j.nutrition.partial).toBe(true);
-  expect(j.nutrition.item_count).toBeGreaterThan(0);
-});
 
 test("checkup: save and see it in history", async ({ authed: page }) => {
   await page.getByRole("tab", { name: "検診" }).click();
@@ -123,17 +105,74 @@ test("chat input: Enter adds a newline, Cmd/Ctrl+Enter sends, and the panel keep
   expect(await log.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
 });
 
-test("meal chat proposal: review card applies routine changes and targets", async ({ authed: page }) => {
-  const H = { Origin: "http://localhost:5173" };
-  const name = `提案テスト ${uniq()}`;
-  const created = await (await page.request.post("/api/health/meals", { headers: H, data: { slot: "breakfast", food_name: name, amount: 100, unit: "g", nutrition: { energy_kcal: 60, protein_g: 4 }, cost_per_serving: 80 } })).json();
-  const id = created.item.id;
-  const addName = `追加テスト ${uniq()}`;
 
-  // apply-proposal: add + update (nutrition scales with the amount) + an unresolvable remove
+test("meals: add a set and a saved food with one tap; totals follow", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const day = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
+
+  const foodName = `単品 ${uniq()}`;
+  const food = await (await page.request.post("/api/health/meals/foods", { headers: H, data: { name: foodName, amount: 1, unit: "個", nutrition: { energy_kcal: 70, protein_g: 6 }, cost_per_serving: 30 } })).json();
+  const set = await (await page.request.post("/api/health/meals/sets", { headers: H, data: { name: `セット ${uniq()}` } })).json();
+  await page.request.post(`/api/health/meals/sets/${set.item.id}/items`, { headers: H, data: { food_id: food.item.id } });
+  await page.request.post(`/api/health/meals/sets/${set.item.id}/items`, { headers: H, data: { name: "ごはん", amount: 150, unit: "g", nutrition: { energy_kcal: 234 } } });
+
+  await page.goto("/health#meal");
+  await page.getByRole("tab", { name: "食事" }).click();
+  await expect(page.getByTestId("set-buttons")).toBeVisible();
+
+  // one tap adds every member of the set
+  await page.getByTestId(`set-add-${set.item.name}`).click();
+  await expect(page.getByTestId("meal-item")).toHaveCount(2, { timeout: 15_000 });
+
+  // one tap adds a single saved food
+  await page.getByTestId(`food-add-${foodName}`).click();
+  await expect(page.getByTestId("meal-item")).toHaveCount(3, { timeout: 15_000 });
+
+  const log = await (await page.request.get(`/api/health/meals/day?day=${day}`)).json();
+  expect(log.entries).toHaveLength(3);
+  expect(log.summary.nutrition.totals.energy_kcal).toBe(374); // 70 + 234 + 70
+  expect(log.summary.cost.total).toBe(60); // 30 + 30, ごはん has no cost
+
+  // the saved food records how often it was used
+  const foods = await (await page.request.get("/api/health/meals/foods")).json();
+  expect(foods.items.find((f: any) => f.name === foodName).use_count).toBeGreaterThanOrEqual(1);
+
+  // cleanup
+  await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
+  await page.request.delete(`/api/health/meals/sets/${set.item.id}`, { headers: H });
+  await page.request.delete(`/api/health/meals/foods/${food.item.id}`, { headers: H });
+});
+
+test("meals: servings multiply nutrition and cost; a day can be cleared", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const day = "2031-03-04"; // a past day of its own, so the test never collides with today's log
+  await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
+  const r = await (await page.request.post("/api/health/meals/entries", { headers: H, data: {
+    day, food_name: `ゆで卵 ${uniq()}`, amount: 1, unit: "個", nutrition: { energy_kcal: 70, protein_g: 6 }, cost: 30, servings: 2, save_as_food: false,
+  } })).json();
+  expect(r.item.servings).toBe(2);
+  expect(r.item.nutrition.energy_kcal).toBe(140);
+  expect(r.item.cost).toBe(60);
+  expect(r.summary.nutrition.totals.energy_kcal).toBe(140);
+
+  const cleared = await (await page.request.delete(`/api/health/meals/day/${day}`, { headers: H })).json();
+  expect(cleared.entries).toHaveLength(0);
+});
+
+test("meal chat proposal: review card applies entries and targets to the day", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const day = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
+  const name = `提案 ${uniq()}`;
+  const created = await (await page.request.post("/api/health/meals/entries", { headers: H, data: { day, food_name: name, amount: 100, unit: "g", nutrition: { energy_kcal: 60, protein_g: 4 }, cost: 80, save_as_food: false } })).json();
+  const id = created.item.id;
+  const addName = `追加 ${uniq()}`;
+
   const res = await page.request.post("/api/health/meals/apply-proposal", { headers: H, data: {
-    routines: [
-      { op: "add", slot: "lunch", food_name: addName, amount: 115, unit: "g", cost_per_serving: 250, nutrition: { energy_kcal: 120, protein_g: 24 } },
+    day,
+    entries: [
+      { op: "add", food_name: addName, amount: 115, unit: "g", cost: 250, nutrition: { energy_kcal: 120, protein_g: 24 }, save_as_food: true },
       { op: "update", id, changes: { amount: 200 } },
       { op: "remove", id: "does-not-exist" },
     ],
@@ -143,20 +182,22 @@ test("meal chat proposal: review card applies routine changes and targets", asyn
   const r = await res.json();
   expect(r).toMatchObject({ added: 1, updated: 1, removed: 0, targets: true, skipped: 1 });
 
-  const meals = await (await page.request.get("/api/health/meals")).json();
-  const updated = meals.items.find((m: any) => m.id === id);
+  const updated = r.entries.find((e: any) => e.id === id);
   expect(updated.amount).toBe(200);
   expect(updated.nutrition.energy_kcal).toBe(120); // 60 kcal per 100 g → 200 g
   expect(updated.nutrition_source).toBe("estimated");
-  expect(meals.items.some((m: any) => m.food_name === addName && m.slot === "lunch")).toBeTruthy();
-  expect(meals.summary.targets.protein_g).toBe(123);
+  expect(r.entries.some((e: any) => e.food_name === addName)).toBeTruthy();
+  expect(r.summary.targets.protein_g).toBe(123);
+
+  // save_as_food also stored it under よく食べるもの
+  const foods = await (await page.request.get("/api/health/meals/foods")).json();
+  const savedFood = foods.items.find((f: any) => f.name === addName);
+  expect(savedFood).toBeTruthy();
 
   await page.goto("/health#meal");
   await page.getByRole("tab", { name: "食事" }).click();
   await expect(page.getByTestId("meal-item").filter({ hasText: addName })).toBeVisible({ timeout: 15_000 });
 
-  // cleanup
-  for (const m of (await (await page.request.get("/api/health/meals")).json()).items) {
-    if (m.food_name === name || m.food_name === addName) await page.request.delete(`/api/health/meals/${m.id}`, { headers: H });
-  }
+  await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
+  await page.request.delete(`/api/health/meals/foods/${savedFood.id}`, { headers: H });
 });
