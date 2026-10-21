@@ -25,14 +25,29 @@ export class KvShim {
   sweep() { this.db.db.prepare("DELETE FROM _kv WHERE expires_at IS NOT NULL AND expires_at < ?").run(Date.now()); }
 }
 
-/** Workers AI through the Cloudflare relay Worker (POST /api/internal/ai). Same `run(model, input)` shape. */
+/**
+ * Workers AI through the Cloudflare relay Worker (POST /api/internal/ai). Same `run(model, input)` shape.
+ * A long prompt (chat history + the whole routine) takes ~15 s, and a chat turn makes two calls, so the
+ * limit is generous; one retry covers a cold start or a dropped connection.
+ */
 export function aiRelay(url: string | undefined, secret: string | undefined) {
   if (!url || !secret) return undefined;
   return {
     async run(model: string, input: unknown) {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Secret": secret }, body: JSON.stringify({ model, input }), signal: AbortSignal.timeout(60_000) });
-      if (!res.ok) throw new Error(`AI relay ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      return res.json();
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Secret": secret }, body: JSON.stringify({ model, input }), signal: AbortSignal.timeout(110_000) });
+          if (res.status >= 500 || res.status === 429) throw new Error(`AI relay ${res.status}: ${(await res.text()).slice(0, 200)}`);
+          if (!res.ok) throw Object.assign(new Error(`AI relay ${res.status}: ${(await res.text()).slice(0, 200)}`), { noRetry: true });
+          return await res.json();
+        } catch (e) {
+          lastErr = e;
+          if ((e as { noRetry?: boolean })?.noRetry || attempt === 1) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      throw lastErr;
     },
   };
 }

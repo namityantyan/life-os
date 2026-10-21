@@ -296,7 +296,7 @@ routes.get("/pressure/personal", async (c) => {
 const CHANNELS = ["health", "meal", "beauty"] as const;
 const ROLE_TEXT: Record<(typeof CHANNELS)[number], string> = {
   health: "健康コーチ。睡眠・回復・歩数・筋トレ・気圧・検診値を踏まえて今日の過ごし方を提案する。検査値から診断や治療方針は決めない。",
-  meal: "管理栄養士。登録された食事ルーティン（食べる予定）と目標を比較し、栄養の目標案や不足分の推定を提案する。合計が途中の値のときは不足・過剰を断定しない。",
+  meal: "管理栄養士。登録された食事ルーティン（食べる予定）と目標を比較し、栄養の目標案や不足分の推定を提案する。合計が途中の値のときは不足・過剰を断定しない。あなた自身はルーティンや目標を変更できない。変更の依頼には、完了した言い方（「追加しました」）も指示の言い方（「追加してください」）も使わず、「下のボタンで反映できます」と案内したうえで、変更後の栄養や費用への影響を短く添える。",
   beauty: "美容アドバイザー。睡眠・食事・活動・検診も参照し、「続けること」「追加候補」「見直すこと」を提案する。商品は根拠がないものを断定しない。",
 };
 type ChatRow = { id: string; role: "user" | "assistant"; content: string; meta_json: string | null; created_at: string };
@@ -324,7 +324,7 @@ routes.post("/chat/:channel", async (c) => {
   if (ch === "meal") {
     const s = await mealSummary(c.env, user.id);
     const items = await all<MealRow>(c.env.DB, "SELECT id,slot,food_name,amount,unit,nutrition_json,nutrition_source,cost_per_serving FROM meal_routines WHERE user_id=?", user.id);
-    roleText += "\nルーティンの追加・変更・削除や目標の変更を頼まれたら、何をどう変えるかを具体的に答えてください（実際の反映は利用者が画面のボタンで行います）。";
+    roleText += "\nルーティンの追加・変更・削除や目標の変更を頼まれたときは、提案内容が返信の下にカードで表示され、利用者がボタンを押すと反映されます。例:「朝食にゆで卵2個（約140kcal・たんぱく質12g）を追加する提案です。下のボタンで反映できます。」";
     roleText += `\n食事ルーティン: ${JSON.stringify(items.map(mealOut).map(({ nutrition_json: _n, ...m }) => m))}\n集計: ${JSON.stringify(s.nutrition.totals)} partial=${s.nutrition.partial}\n目標: ${JSON.stringify(s.targets)}`;
   } else if (ch === "beauty") {
     const items = await all(c.env.DB, "SELECT name,product,timing,purpose FROM beauty_routines WHERE user_id=?", user.id);
@@ -348,12 +348,16 @@ routes.post("/chat/:channel", async (c) => {
           `栄養キーは ${NUTRIENT_KEYS.join(", ")}。既存ルーティン(ID付き): ${JSON.stringify(existing.map((m) => ({ id: m.id, slot: m.slot, food_name: m.food_name, amount: m.amount, unit: m.unit })))}`,
           '変更がなければ {"targets": null, "routines": [], "estimates": []}。',
         ].join("\n") },
-        ...history.slice(-8), { role: "assistant", content: reply.text }, { role: "user", content: "上の会話の変更をJSONで。" },
+        // Only the latest exchange: older turns slow the call down and bring back changes already applied.
+        { role: "user", content: `依頼: ${message}` },
+        { role: "assistant", content: reply.text.slice(0, 1500) },
+        { role: "user", content: "この依頼と返答に含まれる変更だけをJSONで。" },
       ], { targets: null, routines: [], estimates: [] });
       const norm = normalizeMealProposal(r.data, existing.map((m) => ({ id: m.id, slot: m.slot, food_name: m.food_name, amount: m.amount, nutrition: m.nutrition })));
       const raw = (r.data ?? {}) as { estimates?: { food_name?: string; nutrition?: unknown }[] };
       const estimates = Array.isArray(raw.estimates) ? raw.estimates.map((e) => ({ food_name: String(e?.food_name ?? ""), nutrition: parseNutrition(JSON.stringify(e?.nutrition ?? {})) })).filter((e) => e.food_name && e.nutrition && existing.some((m) => m.food_name === e.food_name)) : [];
       if (norm.targets || norm.routines.length || estimates.length) proposal = { targets: norm.targets, routines: norm.routines, estimates };
+      else if (!r.parsed) proposal = { error: "変更内容を読み取れませんでした。もう一度、短く具体的に指示してください（例: 朝にゆで卵2個を追加）。", targets: null, routines: [], estimates: [] };
     } else if (ch === "beauty") {
       const r = await chatJson<{ keep?: string[]; add?: string[]; review?: string[] }>(c.env, [
         { role: "system", content: "あなたは美容アドバイザーです。直前の会話の提案を JSON のみで返します。形式: {\"keep\": [続けること], \"add\": [追加候補], \"review\": [見直すこと]}。各要素は短い日本語。提案がなければ空配列。" },

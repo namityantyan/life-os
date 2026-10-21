@@ -250,7 +250,7 @@ function MealProposalCard({ item, meals, targets, onApplied, onEstimates, applyi
   onEstimates: (e: { food_name: string; nutrition: Nutrition }[]) => void; applyingEstimates: boolean;
 }) {
   const toast = useToast();
-  const p = item.proposal as { routines?: MealOp[]; targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[] };
+  const p = item.proposal as { routines?: MealOp[]; targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[]; error?: string };
   const ops = p.routines ?? [];
   const targetRows = Object.entries(p.targets ?? {}).filter(([k, v]) => targets[k] !== v);
   const [sel, setSel] = useState<Set<number>>(() => new Set(ops.map((_, i) => i)));
@@ -282,6 +282,7 @@ function MealProposalCard({ item, meals, targets, onApplied, onEstimates, applyi
       onApplied({ ...r, at: new Date().toISOString() });
     } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setBusy(false); }
   };
+  if (p.error) return <div className="mt-2 rounded-[var(--radius-lg)] bg-orange/10 p-3 text-sm text-label-2" data-testid="meal-proposal-error">{p.error}</div>;
   return (
     <div className="mt-2 rounded-[var(--radius-lg)] bg-subtle p-3 space-y-2 text-sm" data-testid="meal-proposal">
       <div className="flex items-center justify-between gap-2">
@@ -424,7 +425,7 @@ function MealTab() {
           emptyHint="ルーティンと目標をもとに相談できます。追加・変更・削除や目標の変更を頼むと、反映できる提案が出ます。"
           renderExtra={(m) => {
             const it = m as ChatItem;
-            return it.proposal && (it.proposal.routines?.length || it.proposal.targets || it.proposal.estimates?.length)
+            return it.proposal && (it.proposal.error || it.proposal.routines?.length || it.proposal.targets || it.proposal.estimates?.length)
               ? <MealProposalCard item={it} meals={d.items} targets={targets} onApplied={(res) => { chat.markApplied(it.id!, res); reload(); }} onEstimates={applyEstimates} applyingEstimates={applying} />
               : null;
           }} />

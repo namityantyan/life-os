@@ -32,6 +32,7 @@ export default {
       if (!env.AI_RELAY_SECRET || !safeEqual(req.headers.get("X-Relay-Secret") ?? "", env.AI_RELAY_SECRET)) return json({ error: "unauthorized" }, 401);
       if (!env.AI) return json({ error: "AI binding missing" }, 503);
       const { model, input } = (await req.json()) as { model: string; input: Record<string, unknown> };
+      // Workers limit a request to 30 s of CPU but allow long waits on a binding; give the model room.
       try { return json(await env.AI.run(model as never, input as never)); }
       catch (e) { return json({ error: "ai failed", detail: String(e) }, 502); }
     }
