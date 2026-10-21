@@ -15,3 +15,6 @@ connector/state/
 connector/lifeos_connector.local.ini
 __pycache__/
 .pytest_cache/
+hub/dist/
+hub/hub.env
+hub/data/

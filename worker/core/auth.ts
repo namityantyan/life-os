@@ -20,7 +20,8 @@ async function hmac(secret: string, data: string) {
 
 export async function createSession(env: Env, userId: string): Promise<string> {
   const sid = newId() + newId().replace(/-/g, "");
-  await env.KV.put(`session:${sid}`, JSON.stringify({ userId, createdAt: Date.now() }), { expirationTtl: SESSION_TTL });
+  // Sessions live in D1: KV's free tier allows only 1,000 writes/day.
+  await run(env.DB, "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)", sid, userId, new Date(Date.now() + SESSION_TTL * 1000).toISOString());
   const sig = await hmac(env.SESSION_SECRET, sid);
   return `${sid}.${sig}`;
 }
@@ -30,9 +31,27 @@ export async function readSession(env: Env, token: string | undefined): Promise<
   const [sid, sig] = token.split(".");
   if (!sid || !sig) return null;
   if ((await hmac(env.SESSION_SECRET, sid)) !== sig) return null;
-  const raw = await env.KV.get(`session:${sid}`);
-  if (!raw) return null;
-  try { return (JSON.parse(raw) as { userId: string }).userId; } catch { return null; }
+  const row = await one<{ user_id: string; expires_at: string }>(env.DB, "SELECT user_id, expires_at FROM sessions WHERE id=?", sid);
+  if (row) return Date.parse(row.expires_at) > Date.now() ? row.user_id : null;
+  // Sessions created before the move to D1 are still honoured until they expire.
+  try { const raw = await env.KV.get(`session:${sid}`); return raw ? (JSON.parse(raw) as { userId: string }).userId : null; } catch { return null; }
+}
+
+/** OAuth `state` without storage: nonce.timestamp.signature, with the nonce also kept in a short-lived cookie. */
+export async function signedState(env: Env, payload = ""): Promise<{ state: string; nonce: string }> {
+  const nonce = newId().replace(/-/g, "");
+  const body = `${nonce}.${Date.now()}.${btoa(payload).replace(/=+$/, "")}`;
+  return { state: `${body}.${await hmac(env.SESSION_SECRET, body)}`, nonce };
+}
+export async function verifyState(env: Env, state: string | undefined, nonceCookie: string | undefined, maxAgeMs = 10 * 60 * 1000): Promise<string | null> {
+  if (!state || !nonceCookie) return null;
+  const parts = state.split(".");
+  if (parts.length !== 4) return null;
+  const [nonce, ts, p64, sig] = parts as [string, string, string, string];
+  if (nonce !== nonceCookie) return null;
+  if ((await hmac(env.SESSION_SECRET, `${nonce}.${ts}.${p64}`)) !== sig) return null;
+  if (!(Date.now() - Number(ts) < maxAgeMs)) return null;
+  try { return atob(p64); } catch { return null; }
 }
 
 export async function upsertUser(env: Env, profile: { email: string; name?: string | null; picture?: string | null }): Promise<User> {
@@ -85,8 +104,8 @@ authRoutes.get("/me", async (c) => {
 
 authRoutes.get("/google/start", async (c) => {
   if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: "Google OAuth is not configured (GOOGLE_CLIENT_ID)" }, 503);
-  const state = newId();
-  await c.env.KV.put(`oauth:${state}`, "1", { expirationTtl: 600 });
+  const { state, nonce } = await signedState(c.env);
+  setCookie(c, "lifeos_oauth", nonce, { path: "/api/auth", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: 600 });
   const redirect = `${new URL(c.req.url).origin}/api/auth/google/callback`;
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
@@ -101,8 +120,8 @@ authRoutes.get("/google/start", async (c) => {
 authRoutes.get("/google/callback", async (c) => {
   const code = c.req.query("code");
   const state = c.req.query("state");
-  if (!code || !state || !(await c.env.KV.get(`oauth:${state}`))) return c.text("invalid oauth state", 400);
-  await c.env.KV.delete(`oauth:${state}`);
+  if (!code || (await verifyState(c.env, state, getCookie(c, "lifeos_oauth"))) === null) return c.text("invalid oauth state", 400);
+  deleteCookie(c, "lifeos_oauth", { path: "/api/auth" });
   const redirect = `${new URL(c.req.url).origin}/api/auth/google/callback`;
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -135,7 +154,11 @@ authRoutes.post("/dev-login", async (c) => {
 
 authRoutes.post("/logout", async (c) => {
   const token = getCookie(c, SESSION_COOKIE);
-  if (token) await c.env.KV.delete(`session:${token.split(".")[0]}`);
+  if (token) {
+    const sid = token.split(".")[0];
+    await run(c.env.DB, "DELETE FROM sessions WHERE id=?", sid);
+    try { await c.env.KV.delete(`session:${sid}`); } catch { /* legacy session store */ }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   return c.json({ ok: true });
 });

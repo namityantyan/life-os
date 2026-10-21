@@ -3,6 +3,7 @@ import type { AppEnv } from "../../env";
 import type { WeatherLocation } from "../../../shared/types";
 import { all, getSetting, kvPutSafe } from "../../core/db";
 import { buildLifeContext, dailyHint } from "../../core/context";
+import { fxQuotes } from "../fx/hub";
 import { fetchWeather, WEATHER_CODE_LABEL, type WeatherSnapshot } from "../../core/weather";
 
 export const routes = new Hono<AppEnv>();
@@ -29,7 +30,7 @@ routes.get("/", async (c) => {
   const [tasks, events, pairs] = await Promise.all([
     all(c.env.DB, "SELECT id,title,date FROM planner_items WHERE user_id=? AND type='task' AND done_at IS NULL AND archived_at IS NULL ORDER BY (date IS NULL), date, created_at DESC LIMIT 30", user.id),
     all(c.env.DB, "SELECT id,title,start_at,end_at,type FROM planner_items WHERE user_id=? AND type='event' AND archived_at IS NULL AND substr(start_at,1,10)>=? AND substr(start_at,1,10)<=? ORDER BY start_at LIMIT 30", user.id, today, weekEnd),
-    all(c.env.DB, "SELECT pair,bid,ask,quoted_at FROM fx_quotes ORDER BY pair"),
+    fxQuotes(c.env, user.id),
   ]);
   const [hint, layout] = await Promise.all([dailyHint(c.env, user.id, ctx), getSetting<unknown>(c.env, user.id, "dashboard_layout", null)]);
   return c.json({ context: ctx, suggestion: hint.text, suggestionSource: hint.source, weather, weatherError, weatherConfigured: Boolean(loc), tasks, events, fxPairs: pairs, today, layout });

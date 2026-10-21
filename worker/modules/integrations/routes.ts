@@ -3,7 +3,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
-import { newId } from "../../core/db";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { signedState, verifyState } from "../../core/auth";
 import { loadToken, saveToken, deleteToken } from "../assets/freee";
 import { syncOura } from "../health/oura";
 import { buildGoogleToken, GOOGLE_PROVIDERS, parseRequestedScopes, providersForGrantedScopes, scopeParam, shapeStatus, type GoogleScopeKey, type GoogleTokenResponse, type StoredGoogleToken } from "./logic";
@@ -11,7 +12,6 @@ import { buildGoogleToken, GOOGLE_PROVIDERS, parseRequestedScopes, providersForG
 export const routes = new Hono<AppEnv>();
 
 const STATE_TTL = 600; // 10 min
-const stateKey = (state: string) => `oauth-int:${state}`;
 const redirectUri = (origin: string) => `${origin}/api/integrations/google/callback`;
 const settingsUrl = (result: string) => `/settings?connected=${result}#integrations`;
 
@@ -39,8 +39,8 @@ routes.get("/google/start", async (c) => {
   const user = c.get("user");
   if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: "Google OAuth is not configured (GOOGLE_CLIENT_ID)" }, 503);
   const scopes = parseRequestedScopes(c.req.query("scopes"));
-  const state = newId();
-  await c.env.KV.put(stateKey(state), JSON.stringify({ userId: user.id, scopes }), { expirationTtl: STATE_TTL });
+  const { state, nonce } = await signedState(c.env, JSON.stringify({ userId: user.id, scopes }));
+  setCookie(c, "lifeos_oauth_int", nonce, { path: "/api/integrations", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: STATE_TTL });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
   url.searchParams.set("redirect_uri", redirectUri(new URL(c.req.url).origin));
@@ -57,10 +57,9 @@ routes.get("/google/callback", async (c) => {
   const user = c.get("user");
   const code = c.req.query("code");
   const state = c.req.query("state");
-  if (!state) return c.text("invalid oauth state", 400);
-  const raw = await c.env.KV.get(stateKey(state));
-  if (!raw) return c.text("invalid oauth state", 400);
-  await c.env.KV.delete(stateKey(state));
+  const raw = await verifyState(c.env, state, getCookie(c, "lifeos_oauth_int"), STATE_TTL * 1000);
+  if (raw === null) return c.text("invalid oauth state", 400);
+  deleteCookie(c, "lifeos_oauth_int", { path: "/api/integrations" });
   let bound: { userId: string; scopes: GoogleScopeKey[] };
   try { bound = JSON.parse(raw); } catch { return c.text("invalid oauth state", 400); }
   if (bound.userId !== user.id) return c.text("oauth state does not belong to this user", 403);

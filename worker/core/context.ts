@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import type { LifeContext, WeatherLocation } from "../../shared/types";
 import { all, one, getSetting, jstDate, jstNow, kvPutSafe } from "./db";
 import { fetchWeather } from "./weather";
+import { fxSummary } from "../modules/fx/hub";
 import { chat } from "./ai";
 
 /**
@@ -13,7 +14,7 @@ import { chat } from "./ai";
 export async function buildLifeContext(env: Env, userId: string, opts: { weather?: boolean } = {}): Promise<LifeContext> {
   const today = jstDate();
   const weekAgo = new Date(Date.now() - 7 * 86400e3).toISOString();
-  const [user, oura, lastSession, sessionsWeek, tasksOpen, eventsToday, remindersPending, cardMonth, notes, checkup, meals, beautyCount, fxState, openPos, cashRow] = await Promise.all([
+  const [user, oura, lastSession, sessionsWeek, tasksOpen, eventsToday, remindersPending, cardMonth, notes, checkup, meals, beautyCount, fx, cashRow] = await Promise.all([
     one<{ name: string | null }>(env.DB, "SELECT name FROM users WHERE id=?", userId),
     one<LifeContext["health"]["oura"] & { day: string }>(env.DB, "SELECT day,sleep_duration_sec,sleep_score,readiness_score,steps,hrv,resting_hr,sleep_balance FROM oura_daily WHERE user_id=? ORDER BY day DESC LIMIT 1", userId),
     one<{ part: string; started_at: string }>(env.DB, "SELECT part,started_at FROM training_sessions WHERE user_id=? ORDER BY started_at DESC LIMIT 1", userId),
@@ -26,8 +27,7 @@ export async function buildLifeContext(env: Env, userId: string, opts: { weather
     one<Record<string, unknown>>(env.DB, "SELECT checkup_date,ldl,hdl,tg,total_chol,hba1c,fasting_glucose,bp_sys,bp_dia,ggtp,ast,alt,uric_acid,creatinine FROM checkups WHERE user_id=? ORDER BY checkup_date DESC LIMIT 1", userId),
     all<{ nutrition_json: string | null }>(env.DB, "SELECT nutrition_json FROM meal_routines WHERE user_id=?", userId),
     one<{ n: number }>(env.DB, "SELECT COUNT(*) n FROM beauty_routines WHERE user_id=?", userId),
-    one<{ received_at: string }>(env.DB, "SELECT received_at FROM fx_connector_state WHERE user_id=?", userId),
-    one<{ n: number }>(env.DB, "SELECT COUNT(*) n FROM fx_trades WHERE user_id=? AND status='open'", userId),
+    fxSummary(env, userId),
     one<{ total: number | null; latest: string | null }>(env.DB,
       `SELECT SUM(b.jpy_value) total, MAX(b.recorded_on) latest FROM asset_accounts a
        JOIN asset_balances b ON b.id = (SELECT id FROM asset_balances WHERE account_id=a.id ORDER BY recorded_on DESC, created_at DESC LIMIT 1)
@@ -52,7 +52,6 @@ export async function buildLifeContext(env: Env, userId: string, opts: { weather
     if (loc) { try { pressure = (await fetchWeather(loc)).pressure; } catch { pressure = null; } }
   }
   const cashFresh = Boolean(cashRow?.latest && cashRow.latest >= new Date(Date.now() - 2 * 86400e3).toISOString().slice(0, 10));
-  const connectorOnline = Boolean(fxState?.received_at && Date.now() - new Date(fxState.received_at).getTime() < 45_000);
 
   return {
     now: jstNow().toISOString().replace("Z", "+09:00"),
@@ -78,7 +77,7 @@ export async function buildLifeContext(env: Env, userId: string, opts: { weather
       personal_jpy_cash: cashRow?.total ?? null,
       cash_is_fresh: cashFresh,
     },
-    fx: { open_positions: openPos?.n ?? 0, connector_online: connectorOnline },
+    fx,
     notes,
   };
 }

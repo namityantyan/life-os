@@ -24,6 +24,7 @@ import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, setSetting, nowIso } from "../../core/db";
 import { notify } from "../../core/notify";
+import { hubEnabled, proxyToHub } from "./hub";
 import {
   PAIRS, RULES, RULE_KEYS, TIMEFRAMES, TF_SECONDS, DEFAULT_FX_SETTINGS, YEAR_CONFIG_VALID_UNTIL, CONNECTOR_STALE_MS, LEASE_SECONDS, pipSize,
   type FxSettings, type Permissions, type LeaseInfo, type Rule, type Timeframe, type PairsResponse, type PairView, type SetupMark,
@@ -50,6 +51,7 @@ async function leaseInfo(env: Env, terminalId: string | null): Promise<LeaseInfo
 
 /** The connector authenticates with a shared token; data belongs to the owner (first allowed email). */
 async function ownerUserId(env: Env): Promise<string | null> {
+  if (env.FX_HUB_OWNER_ID) return env.FX_HUB_OWNER_ID;
   const email = (env.ALLOWED_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)[0];
   if (!email) return null;
   const row = await one<{ id: string }>(env.DB, "SELECT id FROM users WHERE email=?", email);
@@ -140,8 +142,39 @@ const settingsZ = z.object({
   stop_reasons: z.array(z.string().max(200)).max(50),
 });
 
+/** Trade notifications: the hub forwards them to the Worker (which owns notifications); the Worker notifies directly. */
+async function fxNotify(env: Env, uid: string, n: Parameters<typeof notify>[2]) {
+  if (env.IS_FX_HUB === "1") {
+    if (!env.FX_HUB_NOTIFY_URL || !env.FX_HUB_SECRET) return;
+    // Retried by the hub's outbox on failure; dedupeKey makes the Worker side idempotent.
+    await hubOutbox(env, { userId: uid, ...n });
+    return;
+  }
+  await notify(env, uid, n);
+}
+async function hubOutbox(env: Env, item: Record<string, unknown>) {
+  await run(env.DB, "CREATE TABLE IF NOT EXISTS hub_outbox (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+  await run(env.DB, "INSERT INTO hub_outbox (id, payload_json) VALUES (?, ?)", newId(), JSON.stringify(item));
+  await flushHubOutbox(env);
+}
+/** Deliver pending trade notifications to the Worker. Called after each enqueue and periodically by the hub. */
+export async function flushHubOutbox(env: Env) {
+  if (!env.FX_HUB_NOTIFY_URL || !env.FX_HUB_SECRET) return;
+  const rows = await all<{ id: string; payload_json: string; attempts: number }>(env.DB, "SELECT id, payload_json, attempts FROM hub_outbox ORDER BY created_at LIMIT 20").catch(() => []);
+  for (const r of rows) {
+    try {
+      const res = await fetch(env.FX_HUB_NOTIFY_URL, { method: "POST", headers: { "Content-Type": "application/json", "X-Hub-Secret": env.FX_HUB_SECRET }, body: r.payload_json, signal: AbortSignal.timeout(8000) });
+      if (res.ok) { await run(env.DB, "DELETE FROM hub_outbox WHERE id=?", r.id); continue; }
+    } catch { /* retry later */ }
+    await run(env.DB, "UPDATE hub_outbox SET attempts=attempts+1 WHERE id=?", r.id);
+  }
+}
+
 /* ====================================================== public routes */
 export const publicRoutes = new Hono<AppEnv>();
+
+// In the Worker, connector traffic goes to the self-hosted hub when one is configured.
+publicRoutes.use("*", async (c, next) => { if (hubEnabled(c.env)) return proxyToHub(c, null); await next(); });
 
 publicRoutes.use("*", async (c, next) => {
   const token = c.env.FX_CONNECTOR_TOKEN;
@@ -225,7 +258,7 @@ publicRoutes.post("/trades", async (c) => {
       const pip = pipSize(t.pair);
       const digits = pip === 0.01 ? 3 : 5;
       const pnl = t.event === "close" && t.pnl_usd != null ? ` 損益 ${t.pnl_usd >= 0 ? "+" : ""}${t.pnl_usd.toFixed(2)} USD${t.r_multiple != null ? ` (${t.r_multiple >= 0 ? "+" : ""}${t.r_multiple.toFixed(2)}R)` : ""}` : "";
-      await notify(c.env, uid, {
+      await fxNotify(c.env, uid, {
         kind: "fx",
         title: `${RULES[t.rule]} ${EVENT_LABEL[t.event]} ${t.pair} ${t.side}`,
         body: `${t.lots} lot @ ${t.price.toFixed(digits)}${pnl}${t.sl != null && t.event !== "close" ? ` SL ${t.sl.toFixed(digits)}` : ""}${t.tp != null && t.event !== "close" ? ` TP ${t.tp.toFixed(digits)}` : ""}`,
@@ -286,6 +319,12 @@ publicRoutes.get("/permissions", async (c) => {
 
 /* ================================================= authenticated routes */
 export const routes = new Hono<AppEnv>();
+
+// In the Worker, everything except the install package is served by the hub when one is configured.
+routes.use("*", async (c, next) => {
+  if (hubEnabled(c.env) && !new URL(c.req.url).pathname.includes("/install")) return proxyToHub(c, c.get("user").id);
+  await next();
+});
 
 routes.get("/", (c) => c.json({ module: "fx", ok: true }));
 
@@ -499,8 +538,10 @@ routes.get("/status", async (c) => {
   return c.json(res);
 });
 
+const connectorBase = (env: Env) => (env.FX_HUB_PUBLIC_URL || env.FX_HUB_URL || env.APP_ORIGIN).replace(/\/$/, "");
+
 routes.get("/install", async (c) => {
-  const origin = c.env.APP_ORIGIN.replace(/\/$/, "");
+  const origin = connectorBase(c.env);
   const markdown = `# Windowsコネクターのインストール・更新
 
 1. XM の MT5 を起動してログインしておきます。
@@ -542,7 +583,7 @@ const CONNECTOR_MODULES: Record<string, string> = {
  *  Updating = unzip over the folder: lifeos_connector.local.ini (own settings) and state/ (ledgers) are never in the zip. */
 routes.get("/install/download", async (c) => {
   if (!c.env.FX_CONNECTOR_TOKEN) return c.json({ error: "FX_CONNECTOR_TOKEN is not configured" }, 503);
-  const origin = c.env.APP_ORIGIN.replace(/\/$/, "");
+  const origin = connectorBase(c.env);
   const ini = [
     "; Life OS FXコネクターの接続設定（ダウンロード時に作成。更新のたびに上書きされます）",
     "; 口座番号・銘柄名・時刻基準などの自分用の設定は lifeos_connector.local.ini に書いてください（上書きされません）",
