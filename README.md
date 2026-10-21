@@ -23,6 +23,10 @@ life-os/
 └─ e2e/               Playwright（実ブラウザ操作テスト）
 ```
 
+### FX ハブ（自前 VPS）
+
+FX のコネクター通信（5 秒ごと）は Cloudflare の無料枠に収まらないため、同じ FX モジュールを VPS 上の Node + SQLite で動かす [FX ハブ](hub/README.md) に任せています。Worker は `FX_HUB_URL` が設定されているときだけ `/api/fx/*` と `/api/integrations/fx/*` をハブへ転送します。
+
 ### OS 部分と共有データ
 
 - **Life Context** (`worker/core/context.ts`): 睡眠・回復・歩数、筋トレ、予定・タスク、カード・現金、FX、メモを 1 つのスナップショットにまとめます。すべての AI 相談（健康・食事・美容・FP・Discord）はこのスナップショットを前提に回答するため、生活全体を踏まえた提案になります。欠測・古い値は null / フラグとして渡し、推測で埋めません。
