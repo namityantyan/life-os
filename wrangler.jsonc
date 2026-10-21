@@ -4,7 +4,7 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  "assets": { "not_found_handling": "single-page-application", "binding": "ASSETS" },
+  "assets": { "not_found_handling": "single-page-application", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
   "observability": { "enabled": true },
   // Top level = local development (no Workers AI binding so `vite dev` works offline; AI calls fall back).
   "d1_databases": [
