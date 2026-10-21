@@ -6,9 +6,24 @@
 #   - copies the connector to %LOCALAPPDATA%\LifeOS\fx-connector (ini and state/ are kept on update)
 #   - runs a connection check, registers autostart at logon (auto-restart), and starts it
 param([switch]$NoStart, [switch]$Quiet)
-$ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 turns any stderr line of a native program into a terminating error when
+# $ErrorActionPreference is "Stop". Keep it at "Continue" for native commands (checked via $LASTEXITCODE)
+# and make every cmdlet stop on error instead.
+$ErrorActionPreference = "Continue"
+$PSDefaultParameterValues = @{ "*:ErrorAction" = "Stop" }
 $ProgressPreference = "SilentlyContinue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+$SetupLog = Join-Path $env:LOCALAPPDATA "LifeOS\fx-setup.log"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SetupLog) | Out-Null
+try { Start-Transcript -Path $SetupLog -Force | Out-Null } catch { }
+trap {
+  Write-Host ""
+  Write-Host "  失敗: $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "  記録: $SetupLog" -ForegroundColor Yellow
+  Write-Host "  このファイルの内容を Claude に送ってください。" -ForegroundColor Yellow
+  try { Stop-Transcript | Out-Null } catch { }
+  exit 1
+}
 
 $Src = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)   # extracted zip folder
 $Dest = Join-Path $env:LOCALAPPDATA "LifeOS\fx-connector"
@@ -21,7 +36,7 @@ $NewShortcutName = "Life OS FX Connector.lnk"
 function Step($n, $text) { Write-Host ""; Write-Host "[$n/7] $text" -ForegroundColor Cyan }
 function Ok($text) { Write-Host "  OK  $text" -ForegroundColor Green }
 function Warn($text) { Write-Host "  !!  $text" -ForegroundColor Yellow }
-function Fail($text) { Write-Host ""; Write-Host "  失敗: $text" -ForegroundColor Red; throw $text }
+function Fail($text) { throw $text }
 
 function Get-ConnectorProcesses([string]$pattern) {
   Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe' OR Name='py.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
@@ -56,7 +71,7 @@ if (Test-Path -LiteralPath $oldShortcut) {
   Ok "旧コネクターの自動起動を無効にしました（$OldShortcutName.disabled）"
 }
 # current new connector (update case)
-try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch { }
+try { if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } } catch { }
 $cur = Get-ConnectorProcesses 'lifeos_connector\.py|run-loop\.cmd'
 foreach ($p in $cur) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { } }
 if ($cur) { Ok "更新のため現在のコネクターを停止しました" }
@@ -179,7 +194,7 @@ if (-not (Get-Process terminal64 -ErrorAction SilentlyContinue)) {
 }
 $env:PYTHONIOENCODING = "utf-8"
 Push-Location $Dest
-$checkOut = & $venvPy lifeos_connector.py --check 2>&1 | Out-String
+$checkOut = & $venvPy lifeos_connector.py --check 2>&1 | ForEach-Object { "$_" } | Out-String
 $checkCode = $LASTEXITCODE
 Pop-Location
 Write-Host $checkOut
@@ -199,7 +214,7 @@ try {
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
   $registered = $true
   Ok "タスクスケジューラに登録しました（$TaskName）"
 } catch { Warn "タスクスケジューラに登録できませんでした。スタートアップのショートカットで代用します。" }
@@ -234,3 +249,5 @@ if (-not $NoStart) {
 }
 Write-Host ""
 Write-Host "セットアップが終わりました。ルールは Life OS の FX 画面で ON にするまで発注しません。" -ForegroundColor Green
+try { Stop-Transcript | Out-Null } catch { }
+exit 0
