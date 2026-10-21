@@ -17,6 +17,9 @@ export type Env = {
   DISCORD_APPLICATION_ID?: string;
   DISCORD_BOT_TOKEN?: string;
   OURA_ACCESS_TOKEN?: string;
+  OURA_CLIENT_ID?: string;
+  OURA_CLIENT_SECRET?: string;
+  OURA_REFRESH_TOKEN_SEED?: string;
   FREEE_CLIENT_ID?: string;
   FREEE_CLIENT_SECRET?: string;
   BACKUP_INGEST_TOKEN?: string;
