@@ -538,7 +538,8 @@ routes.get("/status", async (c) => {
   return c.json(res);
 });
 
-const connectorBase = (env: Env) => (env.FX_HUB_PUBLIC_URL || env.FX_HUB_URL || env.APP_ORIGIN).replace(/\/$/, "");
+// Connector talks to the Worker by default (it forwards to the hub); set FX_HUB_PUBLIC_URL to send it to the hub directly.
+const connectorBase = (env: Env) => (env.FX_HUB_PUBLIC_URL || env.APP_ORIGIN).replace(/\/$/, "");
 
 routes.get("/install", async (c) => {
   const origin = connectorBase(c.env);
