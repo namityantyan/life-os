@@ -81,7 +81,7 @@ test("pressure: 今しんどい creates a log (weather location set first)", asy
 
 test("health chat: sends a message and receives a reply (fallback allowed)", async ({ authed: page }) => {
   const msg = `今日はどう動く？ ${uniq()}`;
-  const input = page.getByLabel("メッセージ");
+  const input = page.getByTestId("chat-input");
   await input.fill(msg);
   await page.getByRole("button", { name: "送信" }).click();
   const log = page.getByTestId("chat-log");
@@ -92,4 +92,71 @@ test("health chat: sends a message and receives a reply (fallback allowed)", asy
   const hist = await page.request.get("/api/health/chat/health");
   const j = await hist.json();
   expect(j.items.some((m: any) => m.role === "assistant")).toBeTruthy();
+});
+
+test("chat input: Enter adds a newline, Cmd/Ctrl+Enter sends, and the panel keeps a fixed height", async ({ authed: page }) => {
+  await page.goto("/health#meal");
+  const panel = page.getByTestId("chat-panel");
+  await expect(panel).toBeVisible();
+  const input = page.getByTestId("chat-input");
+  const before = await panel.boundingBox();
+  const sentCount = () => page.getByTestId("chat-log").locator(".bg-accent").count();
+  const n0 = await sentCount();
+
+  await input.click();
+  await input.type("一行目");
+  await input.press("Enter");
+  await input.type("二行目");
+  await expect(input).toHaveValue("一行目\n二行目");
+  expect(await sentCount()).toBe(n0); // plain Enter never sends
+
+  // the textarea grows, but the panel does not
+  const after = await panel.boundingBox();
+  expect(Math.round(after!.height)).toBe(Math.round(before!.height));
+
+  await input.press("ControlOrMeta+Enter");
+  await expect(input).toHaveValue("");
+  await expect(page.getByTestId("chat-log")).toContainText("二行目");
+  await expect.poll(sentCount).toBe(n0 + 1);
+  // the log scrolls internally instead of growing the page
+  const log = page.getByTestId("chat-log");
+  expect(await log.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+});
+
+test("meal chat proposal: review card applies routine changes and targets", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const name = `提案テスト ${uniq()}`;
+  const created = await (await page.request.post("/api/health/meals", { headers: H, data: { slot: "breakfast", food_name: name, amount: 100, unit: "g", nutrition: { energy_kcal: 60, protein_g: 4 }, cost_per_serving: 80 } })).json();
+  const id = created.item.id;
+  const addName = `追加テスト ${uniq()}`;
+
+  // apply-proposal: add + update (nutrition scales with the amount) + an unresolvable remove
+  const res = await page.request.post("/api/health/meals/apply-proposal", { headers: H, data: {
+    routines: [
+      { op: "add", slot: "lunch", food_name: addName, amount: 115, unit: "g", cost_per_serving: 250, nutrition: { energy_kcal: 120, protein_g: 24 } },
+      { op: "update", id, changes: { amount: 200 } },
+      { op: "remove", id: "does-not-exist" },
+    ],
+    targets: { protein_g: 123 },
+  } });
+  expect(res.ok()).toBeTruthy();
+  const r = await res.json();
+  expect(r).toMatchObject({ added: 1, updated: 1, removed: 0, targets: true, skipped: 1 });
+
+  const meals = await (await page.request.get("/api/health/meals")).json();
+  const updated = meals.items.find((m: any) => m.id === id);
+  expect(updated.amount).toBe(200);
+  expect(updated.nutrition.energy_kcal).toBe(120); // 60 kcal per 100 g → 200 g
+  expect(updated.nutrition_source).toBe("estimated");
+  expect(meals.items.some((m: any) => m.food_name === addName && m.slot === "lunch")).toBeTruthy();
+  expect(meals.summary.targets.protein_g).toBe(123);
+
+  await page.goto("/health#meal");
+  await page.getByRole("tab", { name: "食事" }).click();
+  await expect(page.getByTestId("meal-item").filter({ hasText: addName })).toBeVisible({ timeout: 15_000 });
+
+  // cleanup
+  for (const m of (await (await page.request.get("/api/health/meals")).json()).items) {
+    if (m.food_name === name || m.food_name === addName) await page.request.delete(`/api/health/meals/${m.id}`, { headers: H });
+  }
 });

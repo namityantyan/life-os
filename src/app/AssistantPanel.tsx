@@ -42,7 +42,7 @@ export function AssistantPanel({ open, onOpenChange }: { open: boolean; onOpenCh
   useEffect(() => { if (open) { openedOnce.current = true; load(); } }, [open, load]);
   // Focus the input shortly after opening.
   const bodyRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (open) setTimeout(() => bodyRef.current?.querySelector<HTMLInputElement>("input[aria-label='メッセージ']")?.focus(), 60); }, [open]);
+  useEffect(() => { if (open) setTimeout(() => bodyRef.current?.querySelector<HTMLTextAreaElement>("textarea[aria-label='メッセージ']")?.focus(), 60); }, [open]);
 
   const send = async (text: string) => {
     setBusy(true);
@@ -98,6 +98,7 @@ export function AssistantPanel({ open, onOpenChange }: { open: boolean; onOpenCh
             </div>
             <div ref={bodyRef} className="flex-1 min-h-0 flex flex-col px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2" data-testid="assistant-input">
               <ChatPanel
+                fill
                 messages={messages}
                 busy={busy || (!loaded && open)}
                 onSend={send}

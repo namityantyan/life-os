@@ -213,30 +213,57 @@ export function Item({ children, className, layout = true }: { children: ReactNo
 
 /* ---------- Chat panel (shared by health / meal / beauty / FP / discord preview) ---------- */
 export type ChatMsg = { role: "user" | "assistant"; content: string; provider?: string };
-export function ChatPanel({ messages, onSend, placeholder = "相談する…", busy, actions, emptyHint }: { messages: ChatMsg[]; onSend: (text: string) => Promise<void> | void; placeholder?: string; busy?: boolean; actions?: ReactNode; emptyHint?: string }) {
+/** Shared chat: fixed height with an internal scroll area (the page never grows), a multi-line input that
+ *  grows up to 8 lines, Enter = newline, ⌘/Ctrl+Enter = send (never during IME composition). */
+export function ChatPanel({ messages, onSend, placeholder = "相談する…", busy, actions, emptyHint, fill, height = "min(68dvh, 34rem)", renderExtra }: {
+  messages: ChatMsg[]; onSend: (text: string) => Promise<void> | void; placeholder?: string; busy?: boolean; actions?: ReactNode; emptyHint?: string;
+  /** fill the parent's height (sheets/drawers) instead of the fixed default height */ fill?: boolean; height?: string;
+  /** extra content under an assistant message (e.g. "apply" buttons for a proposal) */ renderExtra?: (m: ChatMsg, index: number) => ReactNode;
+}) {
   const [text, setText] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" }); }, [messages.length, busy]);
-  const send = async () => { const t = text.trim(); if (!t || busy) return; setText(""); await onSend(t); };
+  const logRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const stick = useRef(true); // follow new messages only while the user is at the bottom
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  useEffect(() => {
+    const el = logRef.current; if (!el) return;
+    if (stick.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages.length, busy]);
+  const grow = () => { const ta = taRef.current; if (!ta) return; ta.style.height = "auto"; ta.style.height = `${Math.min(ta.scrollHeight, 8 * 24 + 16)}px`; };
+  useEffect(grow, [text]);
+  const send = async () => {
+    const t = text.trim(); if (!t || busy) return;
+    stick.current = true; setText(""); await onSend(t); taRef.current?.focus();
+  };
   return (
-    <div className="flex flex-col h-full min-h-[24rem]">
-      <div ref={ref} className="flex-1 overflow-auto space-y-3 p-1" data-testid="chat-log">
+    <div className={cx("flex flex-col min-h-0", fill && "h-full")} style={fill ? undefined : { height }} data-testid="chat-panel">
+      <div ref={logRef} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 p-1" data-testid="chat-log">
         {messages.length === 0 && emptyHint && <div className="text-label-3 text-sm text-center py-8">{emptyHint}</div>}
         <AnimatePresence initial={false}>
           {messages.map((m, i) => (
-            <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
-              <div className={cx("max-w-[85%] rounded-[var(--radius-lg)] px-4 py-2.5 text-base whitespace-pre-wrap leading-relaxed", m.role === "user" ? "bg-accent text-white rounded-br-[6px]" : "bg-fill rounded-bl-[6px]")}>
+            <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cx("flex flex-col", m.role === "user" ? "items-end" : "items-start")}>
+              <div className={cx("max-w-[85%] rounded-[var(--radius-lg)] px-4 py-2.5 text-base whitespace-pre-wrap break-words leading-relaxed", m.role === "user" ? "bg-accent text-white rounded-br-[6px]" : "bg-fill rounded-bl-[6px]")}>
                 {m.content}{m.provider === "fallback" && <div className="text-xs opacity-60 mt-1">AI未接続</div>}
               </div>
+              {m.role === "assistant" && renderExtra && <div className="max-w-[85%] w-full">{renderExtra(m, i)}</div>}
             </motion.div>
           ))}
         </AnimatePresence>
         {busy && <div className="flex"><div className="bg-fill rounded-[var(--radius-lg)] px-4 py-3 flex gap-1">{[0, 1, 2].map((i) => <motion.span key={i} className="size-1.5 rounded-full bg-label-2" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: i * 0.15 }} />)}</div></div>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2 py-2">{actions}</div>}
-      <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex gap-2 pt-2">
-        <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} aria-label="メッセージ" />
-        <Button type="submit" variant="primary" disabled={!text.trim() || busy}>送信</Button>
+      {actions && <div className="flex flex-wrap gap-2 py-2 shrink-0">{actions}</div>}
+      <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex gap-2 pt-2 items-end shrink-0">
+        <div className="flex-1 min-w-0">
+          <textarea ref={taRef} rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} aria-label="メッセージ" data-testid="chat-input"
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return; // IME confirm → no send
+              if (e.metaKey || e.ctrlKey) { e.preventDefault(); send(); }
+            }}
+            className={cx(inputCls.replace("h-10 ", ""), "min-h-10 max-h-[13rem] py-2 resize-none leading-6 block")} />
+          <div className="text-[0.6875rem] text-label-3 mt-1 px-1 hidden sm:block">Enterで改行・{isMac ? "⌘" : "Ctrl"}＋Enterで送信</div>
+        </div>
+        <Button type="submit" variant="primary" disabled={!text.trim() || busy} className="mb-0 sm:mb-5">送信</Button>
       </form>
     </div>
   );

@@ -14,11 +14,11 @@ test("assistant: opens via button and ⌘J, chat persists, briefing chips render
 
   await page.keyboard.press("ControlOrMeta+j");
   await expect(page.getByTestId("assistant-panel")).toBeVisible();
-  const input = page.getByTestId("assistant-input").getByLabel("メッセージ");
+  const input = page.getByTestId("assistant-input").getByTestId("chat-input");
   await expect(input).toBeFocused();
   const text = `asst-${Date.now()} 今日は何を優先する？`;
   await input.fill(text);
-  await input.press("Enter");
+  await input.press("ControlOrMeta+Enter");
   const log = page.getByTestId("assistant-panel").getByTestId("chat-log");
   await expect(log).toContainText(text);
   await expect(log.locator("div.bg-fill").last()).not.toBeEmpty({ timeout: 20000 });

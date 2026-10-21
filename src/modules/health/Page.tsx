@@ -26,7 +26,7 @@ type Slot = "breakfast" | "lunch" | "dinner" | "snack";
 type Beauty = { id: string; name: string; product: string | null; timing: string | null; purpose: string | null };
 type Policy = { keep: string[]; add: string[]; review: string[]; note?: string; updated_at?: string } | null;
 type Checkup = { id: string; checkup_date: string; notes: string | null } & Record<CheckupField, number | null>;
-type ChatItem = ChatMsg & { id?: string; proposal?: any };
+type ChatItem = ChatMsg & { id?: string; proposal?: any; applied?: Record<string, unknown> | null };
 
 const SLOT_LABEL: Record<Slot, string> = { breakfast: "朝", lunch: "昼", dinner: "夜", snack: "間食" };
 const SLOTS: Slot[] = ["breakfast", "lunch", "dinner", "snack"];
@@ -66,7 +66,8 @@ function useChat(channel: "health" | "meal" | "beauty") {
     finally { setBusy(false); }
   }, [channel, toast]);
   const lastProposal = useMemo(() => [...messages].reverse().find((m) => m.role === "assistant" && m.proposal)?.proposal ?? null, [messages]);
-  return { messages, busy, send, lastProposal };
+  const markApplied = useCallback((id: string, applied: Record<string, unknown>) => setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, applied } : m))), []);
+  return { messages, busy, send, lastProposal, markApplied };
 }
 
 /* ======================================================================
@@ -234,6 +235,92 @@ function PressureLogModal({ log, onClose, onSaved }: { log: PressureLog | null; 
 /* ======================================================================
    食事
    ====================================================================== */
+/* ---------- Meal chat proposal: review and apply routine changes / target changes ---------- */
+type MealOp =
+  | { op: "add"; slot: Slot; food_name: string; amount: number | null; unit: string | null; cost_per_serving: number | null; nutrition: Nutrition | null }
+  | { op: "update"; id: string; food_name: string; changes: Partial<{ slot: Slot; food_name: string; amount: number | null; unit: string | null; cost_per_serving: number | null; nutrition: Nutrition | null }> }
+  | { op: "remove"; id: string; food_name: string };
+const ALL_NUTRIENTS = [...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS];
+const nutrientLabel = (k: string) => ALL_NUTRIENTS.find((n) => n.key === k) ?? { key: k, label: k, unit: "" };
+const amountText = (a: number | null | undefined, u: string | null | undefined) => (a == null ? "量未設定" : `${fmtNum(a, 1)}${u ?? ""}`);
+const kcalText = (n: Nutrition | null | undefined) => (n?.energy_kcal != null ? `約${fmtNum(n.energy_kcal)}kcal` : null);
+
+function MealProposalCard({ item, meals, targets, onApplied, onEstimates, applyingEstimates }: {
+  item: ChatItem; meals: Meal[]; targets: Nutrition; onApplied: (r: Record<string, unknown>) => void;
+  onEstimates: (e: { food_name: string; nutrition: Nutrition }[]) => void; applyingEstimates: boolean;
+}) {
+  const toast = useToast();
+  const p = item.proposal as { routines?: MealOp[]; targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[] };
+  const ops = p.routines ?? [];
+  const targetRows = Object.entries(p.targets ?? {}).filter(([k, v]) => targets[k] !== v);
+  const [sel, setSel] = useState<Set<number>>(() => new Set(ops.map((_, i) => i)));
+  const [useTargets, setUseTargets] = useState(targetRows.length > 0);
+  const [busy, setBusy] = useState(false);
+  const applied = item.applied;
+  const count = sel.size + (useTargets ? 1 : 0);
+  const describe = (op: MealOp) => {
+    if (op.op === "add") return { tag: "追加", tone: "green" as const, text: `${SLOT_LABEL[op.slot]}・${op.food_name} ${amountText(op.amount, op.unit)}`, sub: [kcalText(op.nutrition), op.nutrition ? "栄養は推定" : "栄養未計算", op.cost_per_serving != null ? fmtYen(op.cost_per_serving) : null].filter(Boolean).join("・") };
+    if (op.op === "remove") { const cur = meals.find((m) => m.id === op.id); return { tag: "削除", tone: "red" as const, text: `${cur ? SLOT_LABEL[cur.slot] + "・" : ""}${op.food_name}`, sub: cur ? amountText(cur.amount, cur.unit) : "" }; }
+    const cur = meals.find((m) => m.id === op.id); const ch = op.changes; const parts: string[] = [];
+    if (ch.slot) parts.push(`${cur ? SLOT_LABEL[cur.slot] : "?"} → ${SLOT_LABEL[ch.slot]}`);
+    if (ch.food_name) parts.push(`名前 → ${ch.food_name}`);
+    if (ch.amount !== undefined) parts.push(`${amountText(cur?.amount, cur?.unit)} → ${amountText(ch.amount, ch.unit ?? cur?.unit)}`);
+    if (ch.cost_per_serving !== undefined) parts.push(`費用 → ${ch.cost_per_serving == null ? "未入力" : fmtYen(ch.cost_per_serving)}`);
+    if (ch.nutrition) parts.push(`栄養 → ${kcalText(ch.nutrition) ?? "更新"}（推定）`);
+    else if (ch.amount != null && cur?.nutrition) parts.push("栄養は量に合わせて換算（推定）");
+    return { tag: "変更", tone: "accent" as const, text: `${cur ? SLOT_LABEL[cur.slot] + "・" : ""}${op.food_name}`, sub: parts.join("、") };
+  };
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ added: number; updated: number; removed: number; targets: boolean; skipped: number }>("/health/meals/apply-proposal", {
+        message_id: item.id, routines: ops.filter((_, i) => sel.has(i)), targets: useTargets ? Object.fromEntries(targetRows) : null,
+      });
+      const msg = [r.added && `追加${r.added}件`, r.updated && `変更${r.updated}件`, r.removed && `削除${r.removed}件`, r.targets && "目標を更新"].filter(Boolean).join("・");
+      toast(msg ? `反映しました（${msg}）` : "反映できる変更がありませんでした", msg ? "success" : "neutral");
+      if (r.skipped) toast(`${r.skipped}件は現在のルーティンと合わないため反映しませんでした`);
+      onApplied({ ...r, at: new Date().toISOString() });
+    } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-2 rounded-[var(--radius-lg)] bg-subtle p-3 space-y-2 text-sm" data-testid="meal-proposal">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">提案された変更</span>
+        {applied ? <Badge tone="green"><span data-testid="meal-proposal-applied">反映済み</span></Badge> : null}
+      </div>
+      {ops.length > 0 && (
+        <ul className="space-y-1.5" data-testid="meal-proposal-ops">
+          {ops.map((op, i) => { const d = describe(op); return (
+            <li key={i}>
+              <label className={cx("flex items-start gap-2", applied && "opacity-60")}>
+                <input type="checkbox" className="mt-1 accent-[var(--accent)] size-4 shrink-0" checked={sel.has(i)} disabled={!!applied || busy}
+                  onChange={(e) => setSel((s0) => { const n = new Set(s0); e.target.checked ? n.add(i) : n.delete(i); return n; })} aria-label={`${d.tag} ${d.text}`} />
+                <span className="min-w-0"><Badge tone={d.tone} className="mr-1.5">{d.tag}</Badge><span>{d.text}</span>{d.sub && <span className="block text-xs text-label-2 mt-0.5">{d.sub}</span>}</span>
+              </label>
+            </li>
+          ); })}
+        </ul>
+      )}
+      {targetRows.length > 0 && (
+        <div className={cx("space-y-1", applied && "opacity-60")}>
+          <label className="flex items-center gap-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={useTargets} disabled={!!applied || busy} onChange={(e) => setUseTargets(e.target.checked)} aria-label="目標値を変更する" /><Badge tone="purple">目標</Badge><span>1日の目標値を変更</span></label>
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 gap-y-0.5 pl-6 text-xs tabular" data-testid="meal-proposal-targets">
+            {targetRows.map(([k, v]) => { const n = nutrientLabel(k); return (
+              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(targets[k], 1) : "未設定"}</span><span className="text-label-3">→</span><span className="text-right font-medium">{fmtNum(v, 1)}{n.unit}</span></div>
+            ); })}
+          </div>
+        </div>
+      )}
+      {!applied && (ops.length > 0 || targetRows.length > 0) && (
+        <Button size="sm" variant="primary" className="w-full" loading={busy} disabled={count === 0} onClick={apply} data-testid="meal-proposal-apply">選んだ変更を反映（{count}件）</Button>
+      )}
+      {p.estimates && p.estimates.length > 0 && (
+        <Button size="sm" variant="tinted" className="w-full" loading={applyingEstimates} onClick={() => onEstimates(p.estimates!)} data-testid="apply-estimates">栄養の推定値を反映（{p.estimates.length}件）</Button>
+      )}
+    </div>
+  );
+}
+
 function MealTab() {
   const toast = useToast();
   const meals = useApi<MealsRes>("/health/meals");
@@ -276,7 +363,6 @@ function MealTab() {
     toast(n ? `${n}件に反映しました` : "反映できる項目がありませんでした", n ? "success" : "neutral"); reload();
     } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setApplying(false); }
   };
-  const prop = chat.lastProposal as { targets?: Nutrition | null; estimates?: { food_name: string; nutrition: Nutrition }[] } | null;
 
   return (
     <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
@@ -332,13 +418,16 @@ function MealTab() {
           )}
         </Section>
       </div>
-      <Card as="section" className="xl:col-span-1 flex flex-col">
+      <Card as="section" className="xl:col-span-1 flex flex-col xl:sticky xl:top-20 self-start w-full">
         <h2 className="text-lg font-semibold tracking-tight mb-2">食事チャット</h2>
-        <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="目標や不足分を相談…" emptyHint="ルーティンと目標をもとに、目標案や推定値を提案します。"
-          actions={prop ? <>
-            {prop.targets && <Button size="sm" variant="tinted" loading={applying} onClick={() => applyTargets(prop.targets!)} data-testid="apply-targets">この目標を使う</Button>}
-            {prop.estimates && prop.estimates.length > 0 && <Button size="sm" variant="tinted" loading={applying} onClick={() => applyEstimates(prop.estimates!)} data-testid="apply-estimates">推定値を反映（{prop.estimates.length}件）</Button>}
-          </> : undefined} />
+        <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="例: 朝にヨーグルト200gを追加して / たんぱく質の目標を120gに"
+          emptyHint="ルーティンと目標をもとに相談できます。追加・変更・削除や目標の変更を頼むと、反映できる提案が出ます。"
+          renderExtra={(m) => {
+            const it = m as ChatItem;
+            return it.proposal && (it.proposal.routines?.length || it.proposal.targets || it.proposal.estimates?.length)
+              ? <MealProposalCard item={it} meals={d.items} targets={targets} onApplied={(res) => { chat.markApplied(it.id!, res); reload(); }} onEstimates={applyEstimates} applyingEstimates={applying} />
+              : null;
+          }} />
       </Card>
       <MealModal meal={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />
       <TargetsModal open={targetsOpen} targets={targets} onClose={() => setTargetsOpen(false)} onSaved={() => { setTargetsOpen(false); reload(); }} />
