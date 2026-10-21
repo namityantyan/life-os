@@ -7,13 +7,16 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "deploy": "CLOUDFLARE_ENV=production vite build && wrangler deploy",
+    "deploy": "bash server/deploy.sh",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "db:migrate:local": "wrangler d1 migrations apply life-os-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply life-os-db --remote --env production",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "deploy:relay": "wrangler deploy -c wrangler.relay.jsonc",
+    "deploy:cloudflare-full": "CLOUDFLARE_ENV=production vite build && wrangler deploy",
+    "build:server": "vite build && node server/build.mjs"
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "^2.0.0",

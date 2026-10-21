@@ -4,8 +4,9 @@ import { authRoutes, requireAuth } from "./core/auth";
 import { coreRoutes } from "./core/routes";
 import { runScheduled } from "./cron";
 import { registerModules, registerPublicModules } from "./modules";
+import { migrateSecrets } from "./selfhost-bridge";
 
-const app = new Hono<AppEnv>();
+export const app = new Hono<AppEnv>();
 
 app.onError((err, c) => {
   console.error(err);
@@ -28,7 +29,7 @@ app.route("/api", authed);
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
 export default {
-  fetch: app.fetch,
+  fetch: (req: Request, env: Env, ctx: ExecutionContext) => migrateSecrets(req, env) ?? app.fetch(req, env, ctx),
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduled(env, event.cron));
   },

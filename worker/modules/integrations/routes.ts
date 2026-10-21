@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { signedState, verifyState } from "../../core/auth";
+import { signedState, verifyState, oauthOrigin } from "../../core/auth";
 import { loadToken, saveToken, deleteToken } from "../assets/freee";
 import { syncOura } from "../health/oura";
 import { buildGoogleToken, GOOGLE_PROVIDERS, parseRequestedScopes, providersForGrantedScopes, scopeParam, shapeStatus, type GoogleScopeKey, type GoogleTokenResponse, type StoredGoogleToken } from "./logic";
@@ -43,7 +43,7 @@ routes.get("/google/start", async (c) => {
   setCookie(c, "lifeos_oauth_int", nonce, { path: "/api/integrations", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: STATE_TTL });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
-  url.searchParams.set("redirect_uri", redirectUri(new URL(c.req.url).origin));
+  url.searchParams.set("redirect_uri", redirectUri(oauthOrigin(c.env, c.req.url)));
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", scopeParam(scopes));
   url.searchParams.set("state", state);
@@ -68,7 +68,7 @@ routes.get("/google/callback", async (c) => {
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ code, client_id: c.env.GOOGLE_CLIENT_ID ?? "", client_secret: c.env.GOOGLE_CLIENT_SECRET ?? "", redirect_uri: redirectUri(new URL(c.req.url).origin), grant_type: "authorization_code" }),
+    body: new URLSearchParams({ code, client_id: c.env.GOOGLE_CLIENT_ID ?? "", client_secret: c.env.GOOGLE_CLIENT_SECRET ?? "", redirect_uri: redirectUri(oauthOrigin(c.env, c.req.url)), grant_type: "authorization_code" }),
   });
   if (!tokenRes.ok) return c.redirect(settingsUrl("google_error"));
   const tok = (await tokenRes.json()) as GoogleTokenResponse;

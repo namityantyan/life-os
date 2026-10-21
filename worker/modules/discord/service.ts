@@ -11,31 +11,20 @@ export const linkKey = (code: string) => `discord:link:${code}`;
 export type BotReply = { reply: string; provider?: "workers-ai" | "fallback" | "rule" | "training"; action: "dashboard" | "training" | "chat" };
 
 /* ---------- Training NLP bridge ----------
- * `logFromText` is provided by the training module (currently exported from training/routes.ts,
- * nlp.ts is the planned home). `import.meta.glob` resolves to {} for files that do not exist, so this
- * module compiles and runs either way; when present, the training parser gets first pick. */
-type LogFromText = (env: Env, userId: string, text: string) => Promise<unknown>;
-const trainingModules = import.meta.glob<{ logFromText?: LogFromText }>(["../training/nlp.ts", "../training/routes.ts"]);
-
+ * The training module parses 筋トレ phrases first ("ベンチプレス 60kg 8回", "終了"). */
 async function tryTrainingLog(env: Env, userId: string, text: string): Promise<string | null> {
   try {
-    for (const key of ["../training/nlp.ts", "../training/routes.ts"]) {
-      const loader = trainingModules[key];
-      if (!loader) continue;
-      const mod = await loader();
-      if (typeof mod.logFromText !== "function") continue;
-      const r = await mod.logFromText(env, userId, text);
-      if (r == null || r === false) return null;
-      if (typeof r === "string") return r || null;
-      if (typeof r !== "object") return null;
-      const o = r as Record<string, unknown>;
-      // training LogResult: { action: "set"|"start"|"finish"|"advice"|"unknown", ok, message }
-      if (o.action === "unknown" || o.handled === false || o.matched === false) return null;
-      const msg = [o.reply, o.message, o.text, o.summary].find((v) => typeof v === "string" && v.trim()) as string | undefined;
-      if (msg) return msg;
-      return o.ok === false ? null : "トレーニングを記録しました。";
-    }
-    return null;
+    const { logFromText } = await import("../training/routes");
+    const r = (await logFromText(env, userId, text)) as unknown;
+    if (r == null || r === false) return null;
+    if (typeof r === "string") return r || null;
+    if (typeof r !== "object") return null;
+    const o = r as Record<string, unknown>;
+    // training LogResult: { action: "set"|"start"|"finish"|"advice"|"unknown", ok, message }
+    if (o.action === "unknown" || o.handled === false || o.matched === false) return null;
+    const msg = [o.reply, o.message, o.text, o.summary].find((v) => typeof v === "string" && v.trim()) as string | undefined;
+    if (msg) return msg;
+    return o.ok === false ? null : "トレーニングを記録しました。";
   } catch (e) {
     console.warn("discord: training logFromText failed", e);
     return null;

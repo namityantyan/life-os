@@ -18,3 +18,5 @@ __pycache__/
 hub/dist/
 hub/hub.env
 hub/data/
+server/dist/
+server/server.env

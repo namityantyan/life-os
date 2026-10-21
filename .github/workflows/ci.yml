@@ -35,6 +35,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - name: Deploy (skipped until the CLOUDFLARE_API_TOKEN repository secret is set)
+      - name: Deploy relay Worker (skipped until the CLOUDFLARE_API_TOKEN repository secret is set)
         if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
-        run: npm run deploy
+        run: npm run deploy:relay

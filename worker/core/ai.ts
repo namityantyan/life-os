@@ -16,8 +16,10 @@ export async function chat(env: Env, messages: ChatMessage[], opts: { maxTokens?
       messages,
       max_tokens: opts.maxTokens ?? 800,
       ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-    } as any)) as { response?: string };
-    const text = (res?.response ?? "").trim();
+    } as any)) as { response?: string | object; choices?: { message?: { content?: string } }[] };
+    // Workers AI returns { response } for most models, but OpenAI-style { choices } for some (e.g. Llama 3.3 fast).
+    const raw = res?.response ?? res?.choices?.[0]?.message?.content ?? "";
+    const text = (typeof raw === "string" ? raw : JSON.stringify(raw)).trim();
     if (!text) throw new Error("empty response");
     return { text, provider: "workers-ai" };
   } catch (e) {

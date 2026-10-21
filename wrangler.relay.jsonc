@@ -1,0 +1,13 @@
+{
+  // Relay deployment that replaces the full app on workers.dev after the move to the VPS (see server/README.md).
+  // Deploy: npx wrangler deploy -c wrangler.relay.jsonc   (same Worker name, so existing secrets are kept)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "life-os-production",
+  "main": "worker/relay.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": [] },
+  "vars": { "SELF_HOSTED_ORIGIN": "https://dashboard.nami-tool.com" }
+}

@@ -8,6 +8,10 @@ import { one, run, newId } from "./db";
 const SESSION_COOKIE = "lifeos_session";
 const SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 
+/** Origin registered with Google for OAuth redirects. When self-hosted, Google still redirects to the old
+ *  workers.dev callback, which bounces the browser (code + state untouched) to the self-hosted server. */
+export const oauthOrigin = (env: Env, requestUrl: string) => (env.GOOGLE_REDIRECT_ORIGIN || new URL(requestUrl).origin).replace(/\/$/, "");
+
 function allowedEmails(env: Env): string[] {
   return (env.ALLOWED_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
@@ -106,7 +110,7 @@ authRoutes.get("/google/start", async (c) => {
   if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: "Google OAuth is not configured (GOOGLE_CLIENT_ID)" }, 503);
   const { state, nonce } = await signedState(c.env);
   setCookie(c, "lifeos_oauth", nonce, { path: "/api/auth", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: 600 });
-  const redirect = `${new URL(c.req.url).origin}/api/auth/google/callback`;
+  const redirect = `${oauthOrigin(c.env, c.req.url)}/api/auth/google/callback`;
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
   url.searchParams.set("redirect_uri", redirect);
@@ -122,7 +126,7 @@ authRoutes.get("/google/callback", async (c) => {
   const state = c.req.query("state");
   if (!code || (await verifyState(c.env, state, getCookie(c, "lifeos_oauth"))) === null) return c.text("invalid oauth state", 400);
   deleteCookie(c, "lifeos_oauth", { path: "/api/auth" });
-  const redirect = `${new URL(c.req.url).origin}/api/auth/google/callback`;
+  const redirect = `${oauthOrigin(c.env, c.req.url)}/api/auth/google/callback`;
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

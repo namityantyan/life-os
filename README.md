@@ -23,9 +23,9 @@ life-os/
 └─ e2e/               Playwright（実ブラウザ操作テスト）
 ```
 
-### FX ハブ（自前 VPS）
+### 動いている場所（2026-10-21〜）
 
-FX のコネクター通信（5 秒ごと）は Cloudflare の無料枠に収まらないため、同じ FX モジュールを VPS 上の Node + SQLite で動かす [FX ハブ](hub/README.md) に任せています。Worker は `FX_HUB_URL` が設定されているときだけ `/api/fx/*` と `/api/integrations/fx/*` をハブへ転送します。
+本番は **旧 VPS 上の自前サーバー**（`https://dashboard.nami-tool.com`）です。Cloudflare Worker 用に書いたアプリを、D1→SQLite、KV→SQLite、Cron→プロセス内タイマーに差し替えて Node.js で動かしています（[server/README.md](server/README.md)）。Cloudflare には Workers AI の中継と、旧 `workers.dev` アドレスの転送だけが残っています。理由は、FX のコネクター通信（5 秒ごと）が Cloudflare 無料枠の書き込み上限を超えたためです。
 
 ### OS 部分と共有データ
 
@@ -87,7 +87,11 @@ npm test             # Vitest
 npm run test:e2e     # Playwright（dev サーバーを自動起動）
 ```
 
-## デプロイ（Cloudflare）
+## デプロイ
+
+本番（自前サーバー）は `npm run deploy`。以下は Cloudflare だけで動かす旧構成の手順です。
+
+### Cloudflare だけで動かす場合
 
 ```bash
 npx wrangler login
