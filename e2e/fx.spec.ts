@@ -108,7 +108,7 @@ test("heartbeat + setup signal + candles → 準備OK · BUY, chart renders, tra
 
   // settings round-trip
   await page.goto("/fx/settings");
-  await expect(page.getByTestId("fx-install-md")).toContainText("lifeos_connector.py");
+  await expect(page.getByTestId("fx-install-md")).toContainText("lifeos_connector.ini");
   const lot = page.getByTestId("fx-common-lot");
   await lot.fill("0.31");
   await page.getByTestId("fx-stop-reasons").fill("理由A\n理由B");
@@ -120,4 +120,21 @@ test("heartbeat + setup signal + candles → 準備OK · BUY, chart renders, tra
   const perms = await (await page.request.get(`/api/integrations/fx/permissions?terminal_id=${TERMINAL}`, { headers: H() })).json();
   expect(perms.common_lot).toBe(0.31);
   await page.request.put("/api/fx/settings", { headers: { Origin: "http://localhost:5173" }, data: { ...s, common_lot: 0.3, stop_reasons: [] } });
+});
+
+test("install: connector zip and diagnostics download from the settings tab", async ({ authed: page }) => {
+  const zip = await page.request.get("/api/fx/install/download");
+  expect(zip.ok()).toBeTruthy();
+  expect(zip.headers()["content-type"]).toContain("application/zip");
+  const bytes = await zip.body();
+  const text = bytes.toString("latin1");
+  expect(text).toContain("lifeos-connector/lifeos_connector.py");
+  expect(text).toContain("lifeos-connector/lifeos_connector.ini");
+  expect(text).toContain("lifeos-connector/check.bat");
+  const diag = await page.request.get("/api/fx/install/diagnostics");
+  expect(diag.ok()).toBeTruthy();
+  const j = await diag.json();
+  expect(JSON.stringify(j)).not.toContain("dev-fx-token");
+  await page.goto("/fx/settings");
+  await expect(page.getByRole("link", { name: /かんたん更新・インストール/ })).toHaveAttribute("href", "/api/fx/install/download");
 });

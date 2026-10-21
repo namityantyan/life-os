@@ -18,6 +18,7 @@
   "dependencies": {
     "@block65/webcrypto-web-push": "^2.0.0",
     "discord-interactions": "^4.4.0",
+    "fflate": "^0.8.3",
     "hono": "^4.13.13",
     "lightweight-charts": "^5.2.1",
     "motion": "^14.4.0",

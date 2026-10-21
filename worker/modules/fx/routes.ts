@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { zipSync, strToU8 } from "fflate";
+import connectorPy from "../../../connector/lifeos_connector.py?raw";
+import connectorReadme from "../../../connector/README.md?raw";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, setSetting, nowIso } from "../../core/db";
@@ -450,12 +453,9 @@ routes.get("/install", async (c) => {
 1. Python 3.11 以上と MetaTrader 5（XM）をWindowsにインストールし、MT5にログインしておきます。
 2. コネクター一式（\`connector/\` フォルダー）をWindowsへコピーします。
 3. \`pip install requests MetaTrader5\` を実行します。
-4. 環境変数または \`lifeos_connector.ini\` に次を設定します。
-   - \`LIFEOS_BASE_URL=${origin}\`
-   - \`FX_CONNECTOR_TOKEN=<サーバーの FX_CONNECTOR_TOKEN と同じ値>\`
-   - \`TERMINAL_ID=<この端末の固定ID（例: win-home）>\`
-5. \`python lifeos_connector.py --check\` で接続確認（注文は出しません）。
-6. \`python lifeos_connector.py\` で常駐させます。5秒ごとに許可を同期し、30秒リースを更新します。
+4. 下の「かんたん更新・インストール」で zip をダウンロードし、任意のフォルダーに展開します（\`lifeos_connector.ini\` に接続先とトークンが入っています）。
+5. \`install.bat\`（pip install）→ \`check.bat\` で接続確認（注文は出しません）。
+6. \`run.bat\` で常駐させます。5秒ごとに許可を同期し、30秒リースを更新します。更新時は同じフォルダーに zip を上書き展開します（ini と state/ は上書きされません）。
 
 接続トークンや口座番号をチャットやメールへ貼り付けないでください。更新時は同じフォルダーへ上書きし、台帳（state/*.json）は削除しないでください。
 `;
@@ -466,9 +466,41 @@ routes.get("/install", async (c) => {
       trades: `${origin}/api/integrations/fx/trades`, candles: `${origin}/api/integrations/fx/candles`, quotes: `${origin}/api/integrations/fx/quotes`,
     },
     downloads: [
-      { label: "かんたん更新・インストール (Windows)", url: null, note: "配布パッケージは未作成。リポジトリの connector/ フォルダーを使用してください。" },
-      { label: "診断用ファイル", url: null, note: "未対応" },
+      { label: "かんたん更新・インストール (Windows)", url: c.env.FX_CONNECTOR_TOKEN ? "/api/fx/install/download" : null, note: c.env.FX_CONNECTOR_TOKEN ? "接続設定済みの zip。展開して install.bat → check.bat の順に実行" : "サーバーの FX_CONNECTOR_TOKEN が未設定です" },
+      { label: "診断用ファイル", url: "/api/fx/install/diagnostics", note: "接続状態・最近の受信・設定を JSON で保存（トークンは含みません）" },
     ],
     token_configured: Boolean(c.env.FX_CONNECTOR_TOKEN),
   });
+});
+
+/** Zip of the Windows connector with a pre-filled ini (token comes from the server secret, never shown in the UI). */
+routes.get("/install/download", async (c) => {
+  if (!c.env.FX_CONNECTOR_TOKEN) return c.json({ error: "FX_CONNECTOR_TOKEN is not configured" }, 503);
+  const origin = c.env.APP_ORIGIN.replace(/\/$/, "");
+  const ini = `[lifeos]\nLIFEOS_BASE_URL=${origin}\nFX_CONNECTOR_TOKEN=${c.env.FX_CONNECTOR_TOKEN}\nTERMINAL_ID=win-home\nMT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n`;
+  const bat = (body: string) => `@echo off\r\ncd /d "%~dp0"\r\n${body}\r\npause\r\n`;
+  const files: Record<string, Uint8Array> = {
+    "lifeos-connector/lifeos_connector.py": strToU8(connectorPy),
+    "lifeos-connector/README.md": strToU8(connectorReadme),
+    "lifeos-connector/requirements.txt": strToU8("requests>=2.31\nMetaTrader5>=5.0.45\n"),
+    "lifeos-connector/lifeos_connector.ini": strToU8(ini),
+    "lifeos-connector/install.bat": strToU8(bat("py -3 -m pip install -r requirements.txt")),
+    "lifeos-connector/check.bat": strToU8(bat("py -3 lifeos_connector.py --check")),
+    "lifeos-connector/run.bat": strToU8(bat("py -3 lifeos_connector.py")),
+  };
+  const zip = zipSync(files, { level: 6 });
+  return new Response(zip, { headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="lifeos-connector-${new Date().toISOString().slice(0, 10)}.zip"`, "Cache-Control": "no-store" } });
+});
+
+/** Diagnostics bundle for support: status, recent signals/trades/events, settings. No secrets. */
+routes.get("/install/diagnostics", async (c) => {
+  const user = c.get("user");
+  const [state, signals, trades, settings] = await Promise.all([
+    one(c.env.DB, "SELECT payload_json, received_at FROM fx_connector_state WHERE user_id=?", user.id),
+    all(c.env.DB, "SELECT pair,rule,side,stage,bar_time,received_at FROM fx_signals WHERE user_id=? ORDER BY received_at DESC LIMIT 50", user.id),
+    all(c.env.DB, "SELECT rule,pair,side,ticket,open_at,close_at,status,pnl_usd,r_multiple FROM fx_trades WHERE user_id=? ORDER BY received_at DESC LIMIT 50", user.id),
+    getSetting(c.env, user.id, "fx_settings", null),
+  ]);
+  const body = JSON.stringify({ generated_at: new Date().toISOString(), app_origin: c.env.APP_ORIGIN, connector_state: state, recent_signals: signals, recent_trades: trades, settings }, null, 2);
+  return new Response(body, { headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="lifeos-fx-diagnostics-${Date.now()}.json"`, "Cache-Control": "no-store" } });
 });
