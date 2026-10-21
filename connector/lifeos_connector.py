@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Life OS FX connector — Windows / MT5 side (SKELETON).
+"""Life OS FX connector — Windows / MT5 side (entry point).
 
-Responsibilities (see README.md and docs/SPEC.md §11):
-  * heartbeat every 5 s → holds the 30-second single-terminal lease, receives permissions
-  * sends closed-bar judgments (signals), trade events, candles and quotes to the server
-  * runs the three rule engines against MT5 (判断・注文・保護・時間決済 are ALL done here)
+What runs here (docs/SPEC.md §11): the three live rules ルールA改良版・ドンチャン改良4・ドンチャン改良6 decide on
+CLOSED bars, order, add (A only, max 3), set SL/TP, trail, time-exit and reconcile against MT5 — all on this PC.
+The Life OS server never orders; it serves permissions/settings and stores status, signals, trades, candles,
+quotes and notifications.
 
-The server never places orders. This file contains the sync loop, config handling and the
-formula-level stubs (SL/TP, lot sizing, holding deadline). Every MT5 call is a TODO.
-`--check` and `--once` never trade.
+  python lifeos_connector.py --check       connection check (server + MT5). Never trades.
+  python lifeos_connector.py --once        one read-only cycle: heartbeat, quotes, candles, signals. Never trades.
+  python lifeos_connector.py               run loop (1 s). New entries/adds only within server permissions.
+  python lifeos_connector.py --clear-stop rule_a   clear one rule's stop after verifying journal == MT5.
+
+Modules: mt5_adapter.py (MetaTrader5 access), lifeos_agent.py (orchestration), rule_a_agent.py /
+donchian_agent.py / donchian_v6_agent.py / auto_strategies.py (order logic from the previous connector),
+rule_a_engine.py / donchian_engine.py / donchian_v6_engine.py / mt5_time.py (unchanged rule engines).
 """
 from __future__ import annotations
 
@@ -16,40 +21,51 @@ import argparse
 import configparser
 import json
 import logging
-import math
 import os
+import re
 import sys
-import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
 try:
     import requests
 except ImportError:  # pragma: no cover
-    print("pip install requests", file=sys.stderr)
+    print("requests がありません。install.bat を実行してください", file=sys.stderr)
     raise
 
-LOG = logging.getLogger("lifeos.fx")
-JST = timezone(timedelta(hours=9))
-UTC = timezone.utc
+from mt5_adapter import MT5Adapter, MT5Settings  # noqa: E402
+from mt5_common import LOGICAL_SYMBOLS, ConnectorError  # noqa: E402
+from mt5_time import MT5TimeError, validate_time_basis  # noqa: E402
 
+VERSION = "1.0.0"
+LOG = logging.getLogger("lifeos.fx")
 PAIRS = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"]
 RULES = {"rule_a": "ルールA改良版", "donchian4": "ドンチャン改良4", "donchian6": "ドンチャン改良6"}
-MAGIC = {"rule_a": 26061801, "donchian4": 26101804, "donchian6": 26101906}
-SL_MULTIPLIER = {"rule_a": 0.5, "donchian4": 1.0, "donchian6": 1.0}
-COST_PIPS = 1.2  # 手数料0.2 + 追加費用1.0
-HEARTBEAT_SEC = 5
-LEASE_SEC = 30
-EXECUTION_WINDOW_SEC = 30  # 確定後30秒を超えた判定は追わない
-
-
-def pip_size(pair: str) -> float:
-    return 0.01 if pair.endswith("/JPY") else 0.0001
+MAGIC = {"rule_a": 26061801, "donchian4": 26101804, "donchian6": 26101906}  # same as the previous connector
+HTTP_TIMEOUT = 5
 
 
 # ----------------------------------------------------------------- config
+def parse_symbol_map(text: str) -> dict[str, str]:
+    """`USD_JPY:USDJPY#,EUR_JPY:EURJPY#` (also accepts USD/JPY=USDJPY#)."""
+    out: dict[str, str] = {}
+    for part in filter(None, (p.strip() for p in (text or "").split(","))):
+        m = re.fullmatch(r"([A-Za-z]{3})[_/]?([A-Za-z]{3})\s*[:=]\s*([A-Za-z0-9._#-]{1,64})", part)
+        if not m:
+            raise SystemExit(f"SYMBOL_MAP の書式が正しくありません: {part}")
+        logical = f"{m.group(1).upper()}_{m.group(2).upper()}"
+        if logical not in LOGICAL_SYMBOLS:
+            raise SystemExit(f"SYMBOL_MAP に対象外の通貨ペアがあります: {logical}")
+        out[logical] = m.group(3)
+    return out
+
+
 @dataclass
 class Config:
     base_url: str
@@ -58,48 +74,69 @@ class Config:
     mt5_path: str = ""
     mt5_login: str = ""
     mt5_server: str = ""
-    state_dir: Path = field(default_factory=lambda: Path("state"))
-    version: str = "0.1.0-skeleton"
+    time_basis: str = "utc"
+    symbol_map: dict = field(default_factory=dict)
+    state_dir: Path = field(default_factory=lambda: HERE / "state")
+    version: str = VERSION
 
     @classmethod
     def load(cls, ini: Optional[Path] = None) -> "Config":
-        cp = configparser.ConfigParser()
-        ini = ini or Path("lifeos_connector.ini")
-        if ini.exists():
-            cp.read(ini, encoding="utf-8")
+        """lifeos_connector.ini (from the download zip; replaced on every update) then
+        lifeos_connector.local.ini (your own settings; never in the zip) — later values win; env vars win over both."""
+        cp = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=(";",))
+        ini = ini or (HERE / "lifeos_connector.ini")
+        local = ini.with_name(ini.stem + ".local.ini")
+        cp.read([f for f in (ini, local) if f.exists()], encoding="utf-8-sig")
         sec = cp["lifeos"] if cp.has_section("lifeos") else {}
 
         def get(key: str, default: str = "") -> str:
-            return os.environ.get(key) or sec.get(key.lower(), default)  # type: ignore[union-attr]
+            return (os.environ.get(key) or sec.get(key.lower(), default) or "").strip()  # type: ignore[union-attr]
 
         base = get("LIFEOS_BASE_URL").rstrip("/")
         token = get("FX_CONNECTOR_TOKEN")
         term = get("TERMINAL_ID") or os.environ.get("COMPUTERNAME", "windows")
         if not base or not token:
             raise SystemExit("LIFEOS_BASE_URL と FX_CONNECTOR_TOKEN を設定してください（環境変数または lifeos_connector.ini）")
-        return cls(base_url=base, token=token, terminal_id=term, mt5_path=get("MT5_PATH"), mt5_login=get("MT5_LOGIN"), mt5_server=get("MT5_SERVER"))
+        login = get("MT5_LOGIN")
+        if login and not login.isdecimal():
+            raise SystemExit("MT5_LOGIN は口座番号（数字）で指定してください")
+        try:
+            basis = validate_time_basis(get("TIME_BASIS", "utc") or "utc")
+        except MT5TimeError as exc:
+            raise SystemExit(str(exc))
+        state = Path(get("STATE_DIR") or "state")
+        if not state.is_absolute():
+            state = (ini.parent if ini.exists() else HERE) / state
+        return cls(base_url=base, token=token, terminal_id=term, mt5_path=get("MT5_PATH"), mt5_login=login,
+                   mt5_server=get("MT5_SERVER"), time_basis=basis, symbol_map=parse_symbol_map(get("SYMBOL_MAP")),
+                   state_dir=state)
 
 
 # ----------------------------------------------------------------- server client
 class LifeOSClient:
-    def __init__(self, cfg: Config):
+    """HTTP client for /api/integrations/fx/*. Reporting only — nothing here can place an order."""
+
+    def __init__(self, cfg: Config, session: Any = None):
         self.cfg = cfg
-        self.s = requests.Session()
-        self.s.headers.update({"Authorization": f"Bearer {cfg.token}", "Content-Type": "application/json", "User-Agent": f"lifeos-fx-connector/{cfg.version}"})
+        self.s = session or requests.Session()
+        self.s.headers.update({"Authorization": f"Bearer {cfg.token}", "Content-Type": "application/json",
+                               "User-Agent": f"lifeos-fx-connector/{cfg.version}"})
         self.base = f"{cfg.base_url}/api/integrations/fx"
 
-    def _post(self, path: str, body: Any) -> requests.Response:
-        return self.s.post(f"{self.base}{path}", data=json.dumps(body), timeout=10)
+    def _post(self, path: str, body: Any) -> Any:
+        r = self.s.post(f"{self.base}{path}", data=json.dumps(body, ensure_ascii=False, allow_nan=False), timeout=HTTP_TIMEOUT)
+        return r
 
     def heartbeat(self, state: dict) -> tuple[int, dict]:
-        r = self._post("/heartbeat", {**state, "terminal_id": self.cfg.terminal_id, "version": self.cfg.version})
+        r = self._post("/heartbeat", {**state, "terminal_id": self.cfg.terminal_id, "lease_holder": self.cfg.terminal_id,
+                                      "version": self.cfg.version})
         try:
             return r.status_code, r.json()
         except ValueError:
             return r.status_code, {}
 
     def permissions(self) -> dict:
-        r = self.s.get(f"{self.base}/permissions", params={"terminal_id": self.cfg.terminal_id}, timeout=10)
+        r = self.s.get(f"{self.base}/permissions", params={"terminal_id": self.cfg.terminal_id}, timeout=HTTP_TIMEOUT)
         r.raise_for_status()
         return r.json()
 
@@ -113,278 +150,155 @@ class LifeOSClient:
 
     def candles(self, pair: str, timeframe: str, bars: list[dict]) -> None:
         for i in range(0, len(bars), 2000):
-            self._post("/candles", {"pair": pair, "timeframe": timeframe, "bars": bars[i : i + 2000]}).raise_for_status()
+            self._post("/candles", {"pair": pair, "timeframe": timeframe, "bars": bars[i:i + 2000]}).raise_for_status()
 
     def quotes(self, items: list[dict]) -> None:
         self._post("/quotes", items).raise_for_status()
 
 
-# ----------------------------------------------------------------- MT5 adapter (TODO)
-class MT5Adapter:
-    """Thin wrapper around the MetaTrader5 package. Every method is a TODO — no real calls yet."""
+# ----------------------------------------------------------------- single instance
+class InstanceLock:
+    """One trading connector per state/ folder (two copies would both think they hold the lease)."""
 
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-        self.connected = False
+    def __init__(self, state_dir: Path):
+        state_dir.mkdir(parents=True, exist_ok=True)
+        self.path = state_dir / "connector.lock"
+        self.handle: Any = None
 
-    def connect(self) -> bool:
-        # TODO: import MetaTrader5 as mt5; mt5.initialize(path=self.cfg.mt5_path, login=..., server=...)
-        LOG.warning("MT5Adapter.connect: TODO (no MetaTrader5 call made)")
-        self.connected = False
-        return self.connected
-
-    def account(self) -> dict:
-        # TODO: mt5.account_info() → {"account": str(login), "equity": float, "currency": "USD"}
-        return {"account": "", "equity": None, "currency": None}
-
-    def rates(self, pair: str, timeframe: str, count: int) -> list[dict]:
-        # TODO: mt5.copy_rates_from_pos(symbol, TF, 0, count); drop the last (forming) bar; map to {t,o,h,l,c} with t = UTC unix seconds.
-        # NOTE: broker server time is not UTC — convert using the server's UTC offset. If None is returned, retry once with 4096.
-        return []
-
-    def tick(self, pair: str) -> Optional[dict]:
-        # TODO: mt5.symbol_info_tick(symbol) → {"pair": pair, "bid": .., "ask": .., "at": iso}
-        return None
-
-    def positions(self) -> list[dict]:
-        # TODO: mt5.positions_get(); keep only our magics; map to ConnectorPosition
-        return []
-
-    def order_send(self, req: dict) -> dict:
-        raise NotImplementedError("TODO: mt5.order_send — never call before the ledger has recorded the intent")
-
-    def order_calc_profit(self, action: str, pair: str, lots: float, price_open: float, price_close: float) -> Optional[float]:
-        # TODO: mt5.order_calc_profit(...) in account currency (USD)
-        return None
-
-    def symbol_limits(self, pair: str) -> dict:
-        # TODO: mt5.symbol_info(symbol) → volume_min / volume_max / volume_step
-        return {"volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01}
-
-
-# ----------------------------------------------------------------- formulas (mirrored from worker/modules/fx/logic.ts)
-def sl_tp(side: str, *, last5: list[dict], atr14: float, close_h1: float, multiplier: float, entry: Optional[float], pip: float) -> dict:
-    """SL origin (buy) = min(min(low5) − 0.1·ATR, close − 0.5·ATR); SL距離 = multiplier × |entry − origin|; TP距離 = 3×SL距離 + 4×1.2 pips."""
-    entry = close_h1 if entry is None else entry
-    if side == "BUY":
-        origin = min(min(b["l"] for b in last5) - 0.1 * atr14, close_h1 - 0.5 * atr14)
-        sl_d = multiplier * (entry - origin)
-        tp_d = 3 * sl_d + 4 * COST_PIPS * pip
-        return {"origin": origin, "sl": entry - sl_d, "tp": entry + tp_d, "sl_distance": sl_d, "tp_distance": tp_d}
-    origin = max(max(b["h"] for b in last5) + 0.1 * atr14, close_h1 + 0.5 * atr14)
-    sl_d = multiplier * (origin - entry)
-    tp_d = 3 * sl_d + 4 * COST_PIPS * pip
-    return {"origin": origin, "sl": entry + sl_d, "tp": entry - tp_d, "sl_distance": sl_d, "tp_distance": tp_d}
-
-
-def lot_for_donchian6(risk_usd: float, sl_pips: float, pip_value_usd: float, cost_usd: Optional[float] = None, *, step: float = 0.01, vmin: float = 0.01, vmax: float = 50.0) -> Optional[float]:
-    """Round DOWN so that SL loss + cost ≤ risk_usd. None → do not order."""
-    if sl_pips <= 0 or pip_value_usd <= 0 or risk_usd <= 0:
-        return None
-    cost = COST_PIPS * pip_value_usd if cost_usd is None else cost_usd
-    per_lot = sl_pips * pip_value_usd + cost
-    lots = math.floor(risk_usd / per_lot / step + 1e-9) * step
-    lots = round(min(lots, vmax), 2)
-    if lots < vmin or lots * per_lot > risk_usd + 1e-9:
-        return None
-    return lots
-
-
-def next_jst_0500(t: datetime) -> datetime:
-    j = t.astimezone(JST)
-    c = j.replace(hour=5, minute=0, second=0, microsecond=0)
-    if c <= j:
-        c += timedelta(days=1)
-    return c.astimezone(UTC)
-
-
-def next_saturday_jst_0500(t: datetime) -> datetime:
-    c = next_jst_0500(t)
-    while c.astimezone(JST).weekday() != 5:
-        c += timedelta(days=1)
-    return c
-
-
-def holding_deadline(rule: str, open_at: datetime) -> datetime:
-    if rule == "rule_a":
-        return min(open_at + timedelta(hours=18), next_jst_0500(open_at))
-    return min(open_at + timedelta(hours=48), next_saturday_jst_0500(open_at))
-
-
-def realized_r_block(closed: list[dict], now: datetime, limits: dict) -> dict:
-    """Sum realized R per UTC day / Monday-start week / month across the 3 ledgers."""
-    day = now.strftime("%Y-%m-%d"); month = now.strftime("%Y-%m")
-    week = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-    d = w = m = 0.0
-    for t in closed:
-        if t.get("r_multiple") is None or not t.get("close_at"):
-            continue
-        c = datetime.fromisoformat(t["close_at"].replace("Z", "+00:00")).astimezone(UTC)
-        if c.strftime("%Y-%m-%d") == day: d += t["r_multiple"]
-        if (c - timedelta(days=c.weekday())).strftime("%Y-%m-%d") == week: w += t["r_multiple"]
-        if c.strftime("%Y-%m") == month: m += t["r_multiple"]
-    blocked = d <= limits.get("day", -2) or w <= limits.get("week", -3) or m <= limits.get("month", -2)
-    return {"blocked": blocked, "day_r": d, "week_r": w, "month_r": m}
-
-
-# ----------------------------------------------------------------- ledgers
-class Ledger:
-    """Per-rule journal. Intents are written BEFORE order_send; unknown results are never resent."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.data: dict = {"intents": [], "legs": [], "closed": [], "stop_reasons": [], "start_lot": None}
-        if path.exists():
-            self.data = json.loads(path.read_text(encoding="utf-8"))
-
-    def save(self) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, self.path)  # atomic on Windows/NTFS
-
-    def stop(self, reason: str) -> None:
-        if reason not in self.data["stop_reasons"]:
-            self.data["stop_reasons"].append(reason)
-            self.save()
-
-
-# ----------------------------------------------------------------- rule engines (stubs)
-class RuleEngine:
-    rule = ""
-    judge_tf = "H1"
-
-    def __init__(self, mt5: MT5Adapter, ledger: Ledger):
-        self.mt5 = mt5
-        self.ledger = ledger
-
-    def evaluate(self, pair: str, now: datetime) -> Optional[dict]:
-        """Return a signal payload for the last CLOSED judgment bar, or None when history is insufficient.
-        TODO: compute SMA10/90 on D1/H4/H1, slopes, SMA16±0.35ATR14 touch on the previous 8 H1, ADX14, breakouts…"""
-        return None
-
-    def manage(self, permissions: dict, now: datetime) -> list[dict]:
-        """Protect / trail / time-close OWN legs only. Returns trade events to report. TODO."""
-        return []
-
-    def allowed_to_enter(self, permissions: dict, now: datetime) -> bool:
-        if self.rule not in permissions.get("enabled_rules", []):
-            return False
-        if permissions.get("r_limit_block", {}).get("blocked"):
-            return False
-        if not permissions.get("lease", {}).get("held_by_you"):
-            return False
-        if self.ledger.data["stop_reasons"]:
-            return False
-        th = permissions.get("trading_hours", {})
-        if th.get("weekdays_only", True) and now.weekday() >= 5:
-            return False
-        if not (th.get("start_utc", 6) <= now.hour < th.get("end_utc", 20)):
-            return False
-        return True
-
-
-class RuleAEngine(RuleEngine):
-    rule = "rule_a"; judge_tf = "H1"; trail_trigger_pips = 100; max_adds = 3
-    # TODO: adds when a closed M5 closes ≥10 pips beyond M5 SMA20 against the position; trailing M5 SMA20±10 pips after +100 pips.
-
-
-class Donchian4Engine(RuleEngine):
-    rule = "donchian4"; judge_tf = "H4"; trail_trigger_pips = 60; trail_distance_pips = 50
-    # TODO: D1 slope 15 bars, H4 slope 3 bars, H4 close strictly beyond previous 24 H4 high/low, UTC06–20 weekdays, H1 continuity, spread/ATR checks.
-
-
-class Donchian6Engine(Donchian4Engine):
-    rule = "donchian6"; trail_distance_pips = 30
-    # TODO: + close strictly above daily R1 (buy) / below S1 (sell) using JST06:00-bucketed days built from observed H1; lot from risk_usd_donchian6.
-
-    @staticmethod
-    def pivots(d1: dict) -> dict:
-        p = (d1["h"] + d1["l"] + d1["c"]) / 3
-        return {"P": p, "R1": 2 * p - d1["l"], "S1": 2 * p - d1["h"]}
-
-
-# ----------------------------------------------------------------- main loop
-class Connector:
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-        self.client = LifeOSClient(cfg)
-        self.mt5 = MT5Adapter(cfg)
-        self.ledgers = {r: Ledger(cfg.state_dir / f"{name}.json") for r, name in (("rule_a", "rule-a"), ("donchian4", "donchian-v4"), ("donchian6", "donchian-v6"))}
-        self.engines = [RuleAEngine(self.mt5, self.ledgers["rule_a"]), Donchian4Engine(self.mt5, self.ledgers["donchian4"]), Donchian6Engine(self.mt5, self.ledgers["donchian6"])]
-        self.permissions: dict = {}
-        self.lease_ok_until = 0.0
-
-    def state(self) -> dict:
-        acc = self.mt5.account()
-        reasons = sorted({r for l in self.ledgers.values() for r in l.data["stop_reasons"]})
-        return {"account": acc.get("account", ""), "equity": acc.get("equity"), "positions": self.mt5.positions(), "mt5_connected": self.mt5.connected, "stop_reasons": reasons}
-
-    def sync(self) -> bool:
-        """One heartbeat. Returns True when we hold the lease."""
+    def acquire(self) -> None:
+        handle = open(self.path, "a+")
         try:
-            code, body = self.client.heartbeat(self.state())
-        except requests.RequestException as e:
-            LOG.warning("heartbeat failed: %s", e)
-            return time.monotonic() < self.lease_ok_until
-        if code == 409:
-            LOG.warning("lease held by another terminal: %s — new entries paused", body.get("lease"))
-            return False
-        if code != 200:
-            LOG.warning("heartbeat HTTP %s: %s", code, body)
-            return time.monotonic() < self.lease_ok_until
-        self.permissions = body.get("permissions", {})
-        self.lease_ok_until = time.monotonic() + LEASE_SEC
-        return bool(self.permissions.get("lease", {}).get("held_by_you"))
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            raise SystemExit("このフォルダーのコネクターは既に起動しています（run.bat の画面を確認してください）")
+        self.handle = handle
 
-    def cycle(self, trade: bool) -> None:
-        now = datetime.now(UTC)
-        has_lease = self.sync()
-        # quotes
-        ticks = [t for t in (self.mt5.tick(p) for p in PAIRS) if t]
-        if ticks:
-            self.client.quotes(ticks)
-        # TODO: on each new closed bar, push candles (M5/H1/H4/D1) and evaluate rules → signals
-        signals = [s for eng in self.engines for s in (eng.evaluate(p, now) for p in PAIRS) if s]
-        if signals:
-            self.client.signals(signals)
-        # manage own legs regardless of permissions (protection continues while paused)
-        events = [e for eng in self.engines for e in eng.manage(self.permissions, now)]
-        if events:
-            self.client.trades(events)
-        if not trade or not has_lease:
-            return
-        # TODO: for signals with stage == "entry": if engine.allowed_to_enter(...) and the bar closed < 30 s ago,
-        #   write the intent to the ledger, then order_send with the first available Ask/Bid, then report {event:"open"}.
-        #   Never resend an order whose result is unknown; stop the rule and report via stop_reasons instead.
-
-    def run(self, once: bool = False, trade: bool = True) -> None:
-        self.mt5.connect()
-        while True:
+    def release(self) -> None:
+        if self.handle is not None:
             try:
-                self.cycle(trade=trade)
-            except Exception:  # keep the loop alive; protection must continue
-                LOG.exception("cycle error")
-            if once:
-                return
-            time.sleep(HEARTBEAT_SEC)
+                self.handle.close()
+            finally:
+                self.handle = None
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Life OS FX connector (skeleton)")
-    ap.add_argument("--check", action="store_true", help="connection check only (no trading)")
-    ap.add_argument("--once", action="store_true", help="single sync cycle (no trading)")
+# ----------------------------------------------------------------- wiring
+def is_local(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
+
+
+def make_adapter(cfg: Config, *, read_only: bool, fake: bool = False) -> MT5Adapter:
+    settings = MT5Settings(terminal_path=cfg.mt5_path, expected_login=cfg.mt5_login, expected_server=cfg.mt5_server,
+                           time_basis="utc" if fake else cfg.time_basis, symbol_map=cfg.symbol_map)
+    module = None
+    if fake:
+        from fake_mt5 import FakeMT5
+        module = FakeMT5()
+    return MT5Adapter(settings, mt5_module=module, read_only=read_only)
+
+
+def check(cfg: Config, fake: bool = False) -> dict:
+    """Connection check: server heartbeat + MT5 identity/symbols/time basis. No agent is created; never trades."""
+    out: dict[str, Any] = {"version": cfg.version, "terminal_id": cfg.terminal_id, "server": cfg.base_url}
+    client = LifeOSClient(cfg)
+    adapter = make_adapter(cfg, read_only=True, fake=fake)
+    try:
+        adapter.connect()
+        out["mt5"] = {"connected": True, "account": adapter.account_summary(), "symbols": adapter.symbols,
+                      "time_basis": adapter.time_basis}
+        offset = adapter.tick_offset_seconds()
+        if offset is not None:
+            out["mt5"]["tick_minus_local_utc_sec"] = round(offset, 1)
+            hint = "utc" if abs(offset) < 900 else "xm_europe" if 6300 <= offset <= 11700 else "不明（Windowsの時計を確認）"
+            out["mt5"]["time_basis_hint"] = hint
+            if hint in ("utc", "xm_europe") and hint != adapter.time_basis:
+                out["mt5"]["warning"] = f"TIME_BASIS={adapter.time_basis} ですが、ティック時刻は {hint} に見えます。ini を確認してください（違っていると新規は止まります）。"
+    except ConnectorError as exc:
+        out["mt5"] = {"connected": False, "error": str(exc)}
+    except Exception as exc:
+        out["mt5"] = {"connected": False, "error": f"{type(exc).__name__}: {exc}"}
+    hb = {"account": (out.get("mt5", {}).get("account") or {}).get("account", ""),
+          "equity": (out.get("mt5", {}).get("account") or {}).get("equity"),
+          "positions": [], "mt5_connected": bool(out["mt5"].get("connected")), "stop_reasons": []}
+    try:
+        code, body = client.heartbeat(hb)
+        perms = body.get("permissions", {}) if isinstance(body, dict) else {}
+        out["status"] = code
+        out["lease"] = perms.get("lease") or body.get("lease")
+        out["enabled_rules"] = perms.get("enabled_rules")
+        out["common_lot"] = perms.get("common_lot")
+        out["year_config_valid"] = perms.get("year_config_valid")
+    except requests.RequestException as exc:
+        out["status"] = None
+        out["error"] = f"サーバーに接続できません: {type(exc).__name__}"
+    adapter.close()
+    return out
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description=f"Life OS FX connector {VERSION}")
+    ap.add_argument("--check", action="store_true", help="connection check only (never trades)")
+    ap.add_argument("--once", action="store_true", help="one read-only sync cycle (never trades)")
+    ap.add_argument("--clear-stop", choices=sorted(RULES), help="clear one rule's stop after verifying journal == MT5")
     ap.add_argument("--ini", type=Path, default=None)
-    args = ap.parse_args()
+    ap.add_argument("--fake-mt5", action="store_true", help="development only: synthetic MT5 (local server URLs only)")
+    args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = Config.load(args.ini)
+    if args.fake_mt5 and not is_local(cfg.base_url):
+        raise SystemExit("--fake-mt5 はローカルの開発サーバー（localhost）にだけ使えます")
     if args.check:
-        c = LifeOSClient(cfg)
-        code, body = c.heartbeat({"account": "", "equity": None, "positions": [], "mt5_connected": False})
-        print(json.dumps({"status": code, "lease": body.get("permissions", {}).get("lease"), "enabled_rules": body.get("permissions", {}).get("enabled_rules")}, ensure_ascii=False, indent=1))
-        return
-    Connector(cfg).run(once=args.once, trade=not args.once)
+        print(json.dumps(check(cfg, fake=args.fake_mt5), ensure_ascii=False, indent=1))
+        return 0
+
+    from lifeos_agent import Orchestrator, clear_stop  # imported late so --check works with a partial install
+
+    if args.clear_stop:
+        lock = InstanceLock(cfg.state_dir)
+        lock.acquire()  # refuses while run.bat is running: journals have a single writer
+        adapter = make_adapter(cfg, read_only=True, fake=args.fake_mt5)
+        orch = Orchestrator(cfg, LifeOSClient(cfg), adapter, trade=False)
+        if not orch.ensure_connected() or orch.strategies is None:
+            print("MT5に接続できないため確認できません", file=sys.stderr)
+            return 1
+        try:
+            print(clear_stop(orch.strategies, args.clear_stop, adapter))
+        except ConnectorError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        finally:
+            adapter.close()
+            lock.release()
+        return 0
+
+    if args.once:
+        adapter = make_adapter(cfg, read_only=True, fake=args.fake_mt5)
+        orch = Orchestrator(cfg, LifeOSClient(cfg), adapter, trade=False)
+        print(json.dumps(orch.run_once_report(), ensure_ascii=False, indent=1, default=str))
+        adapter.close()
+        return 0
+
+    lock = InstanceLock(cfg.state_dir)
+    lock.acquire()
+    adapter = make_adapter(cfg, read_only=False, fake=args.fake_mt5)
+    orch = Orchestrator(cfg, LifeOSClient(cfg), adapter, trade=True)
+    LOG.info("Life OS FX connector %s started (terminal %s). New entries follow the server permissions.", VERSION, cfg.terminal_id)
+    try:
+        orch.run()
+    except KeyboardInterrupt:
+        LOG.info("stopped")
+    finally:
+        adapter.close()
+        lock.release()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -2,6 +2,18 @@ import { Hono } from "hono";
 import { zipSync, strToU8 } from "fflate";
 import connectorPy from "../../../connector/lifeos_connector.py?raw";
 import connectorReadme from "../../../connector/README.md?raw";
+import connectorRequirements from "../../../connector/requirements.txt?raw";
+import agentPy from "../../../connector/lifeos_agent.py?raw";
+import mt5AdapterPy from "../../../connector/mt5_adapter.py?raw";
+import mt5CommonPy from "../../../connector/mt5_common.py?raw";
+import mt5TimePy from "../../../connector/mt5_time.py?raw";
+import ruleAEnginePy from "../../../connector/rule_a_engine.py?raw";
+import donchianEnginePy from "../../../connector/donchian_engine.py?raw";
+import donchianV6EnginePy from "../../../connector/donchian_v6_engine.py?raw";
+import ruleAAgentPy from "../../../connector/rule_a_agent.py?raw";
+import donchianAgentPy from "../../../connector/donchian_agent.py?raw";
+import donchianV6AgentPy from "../../../connector/donchian_v6_agent.py?raw";
+import autoStrategiesPy from "../../../connector/auto_strategies.py?raw";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, setSetting, nowIso } from "../../core/db";
@@ -455,7 +467,7 @@ routes.get("/install", async (c) => {
 3. \`pip install requests MetaTrader5\` を実行します。
 4. 下の「かんたん更新・インストール」で zip をダウンロードし、任意のフォルダーに展開します（\`lifeos_connector.ini\` に接続先とトークンが入っています）。
 5. \`install.bat\`（pip install）→ \`check.bat\` で接続確認（注文は出しません）。
-6. \`run.bat\` で常駐させます。5秒ごとに許可を同期し、30秒リースを更新します。更新時は同じフォルダーに zip を上書き展開します（ini と state/ は上書きされません）。
+6. \`run.bat\` で常駐させます。5秒ごとに許可を同期し、30秒リースを更新します。更新時は同じフォルダーに zip を上書き展開します（自分用の設定 \`lifeos_connector.local.ini\` と台帳 \`state/\` は zip に含まれないので残ります）。
 
 接続トークンや口座番号をチャットやメールへ貼り付けないでください。更新時は同じフォルダーへ上書きし、台帳（state/*.json）は削除しないでください。
 `;
@@ -473,16 +485,35 @@ routes.get("/install", async (c) => {
   });
 });
 
-/** Zip of the Windows connector with a pre-filled ini (token comes from the server secret, never shown in the UI). */
+/** Every Python module the connector needs (connector/*.py, tests and the fake broker excluded). */
+const CONNECTOR_MODULES: Record<string, string> = {
+  "lifeos_connector.py": connectorPy, "lifeos_agent.py": agentPy, "mt5_adapter.py": mt5AdapterPy, "mt5_common.py": mt5CommonPy,
+  "mt5_time.py": mt5TimePy, "rule_a_engine.py": ruleAEnginePy, "donchian_engine.py": donchianEnginePy, "donchian_v6_engine.py": donchianV6EnginePy,
+  "rule_a_agent.py": ruleAAgentPy, "donchian_agent.py": donchianAgentPy, "donchian_v6_agent.py": donchianV6AgentPy, "auto_strategies.py": autoStrategiesPy,
+};
+
+/** Zip of the Windows connector with a pre-filled ini (token comes from the server secret, never shown in the UI).
+ *  Updating = unzip over the folder: lifeos_connector.local.ini (own settings) and state/ (ledgers) are never in the zip. */
 routes.get("/install/download", async (c) => {
   if (!c.env.FX_CONNECTOR_TOKEN) return c.json({ error: "FX_CONNECTOR_TOKEN is not configured" }, 503);
   const origin = c.env.APP_ORIGIN.replace(/\/$/, "");
-  const ini = `[lifeos]\nLIFEOS_BASE_URL=${origin}\nFX_CONNECTOR_TOKEN=${c.env.FX_CONNECTOR_TOKEN}\nTERMINAL_ID=win-home\nMT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n`;
+  const ini = [
+    "; Life OS FXコネクターの接続設定（ダウンロード時に作成。更新のたびに上書きされます）",
+    "; 口座番号・銘柄名・時刻基準などの自分用の設定は lifeos_connector.local.ini に書いてください（上書きされません）",
+    "[lifeos]",
+    `LIFEOS_BASE_URL=${origin}`,
+    `FX_CONNECTOR_TOKEN=${c.env.FX_CONNECTOR_TOKEN}`,
+    "TERMINAL_ID=win-home",
+    "MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "; XMのサーバー時刻（夏 UTC+3 / 冬 UTC+2）。check.bat の time_basis_hint が utc なら local.ini で TIME_BASIS=utc に",
+    "TIME_BASIS=xm_europe",
+    "",
+  ].join("\r\n");
   const bat = (body: string) => `@echo off\r\ncd /d "%~dp0"\r\n${body}\r\npause\r\n`;
   const files: Record<string, Uint8Array> = {
-    "lifeos-connector/lifeos_connector.py": strToU8(connectorPy),
+    ...Object.fromEntries(Object.entries(CONNECTOR_MODULES).map(([name, src]) => [`lifeos-connector/${name}`, strToU8(src)])),
     "lifeos-connector/README.md": strToU8(connectorReadme),
-    "lifeos-connector/requirements.txt": strToU8("requests>=2.31\nMetaTrader5>=5.0.45\n"),
+    "lifeos-connector/requirements.txt": strToU8(connectorRequirements),
     "lifeos-connector/lifeos_connector.ini": strToU8(ini),
     "lifeos-connector/install.bat": strToU8(bat("py -3 -m pip install -r requirements.txt")),
     "lifeos-connector/check.bat": strToU8(bat("py -3 lifeos_connector.py --check")),

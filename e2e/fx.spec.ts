@@ -21,7 +21,10 @@ test("pairs show 更新待ち when the connector is silent", async ({ authed: pa
   expect(sig.ok()).toBeTruthy();
   await page.goto("/fx");
   await expect(page.getByTestId("fx-mark-AUDUSD-rule_a").locator("[data-mark]")).toHaveText("更新待ち");
-  // no signal ever for donchian6 on this pair → 更新待ち as well
+  // donchian6 H4 judgment bar (open 10 h ago, closed 6 h ago) older than 5 h → 更新待ち as well (posted explicitly: a local connector smoke run may have sent fresh ones)
+  const d6 = await page.request.post("/api/integrations/fx/signals", { headers: H(), data: { pair: "AUD/USD", rule: "donchian6", side: null, stage: "none", bar_time: new Date(Date.now() - 10 * 3600_000).toISOString() } });
+  expect(d6.ok()).toBeTruthy();
+  await page.reload();
   await expect(page.getByTestId("fx-mark-AUDUSD-donchian6").locator("[data-mark]")).toHaveText("更新待ち");
 });
 
@@ -131,6 +134,14 @@ test("install: connector zip and diagnostics download from the settings tab", as
   expect(text).toContain("lifeos-connector/lifeos_connector.py");
   expect(text).toContain("lifeos-connector/lifeos_connector.ini");
   expect(text).toContain("lifeos-connector/check.bat");
+  // connector 1.0.0: every Python module the Windows side needs, plus requirements.txt (fake broker and tests are not shipped)
+  for (const f of ["lifeos_agent.py", "mt5_adapter.py", "mt5_common.py", "mt5_time.py", "rule_a_engine.py", "donchian_engine.py", "donchian_v6_engine.py",
+    "rule_a_agent.py", "donchian_agent.py", "donchian_v6_agent.py", "auto_strategies.py", "requirements.txt", "install.bat", "run.bat", "README.md"]) {
+    expect(text).toContain(`lifeos-connector/${f}`);
+  }
+  expect(text).not.toContain("lifeos-connector/fake_mt5.py");
+  expect(text).not.toContain("lifeos-connector/lifeos_connector.local.ini");
+  expect(text).not.toContain("lifeos-connector/state/");
   const diag = await page.request.get("/api/fx/install/diagnostics");
   expect(diag.ok()).toBeTruthy();
   const j = await diag.json();

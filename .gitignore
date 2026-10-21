@@ -11,3 +11,7 @@ worker-configuration.d.ts
 test-results*
 *.tsbuildinfo
 connector/lifeos_connector.ini
+connector/state/
+connector/lifeos_connector.local.ini
+__pycache__/
+.pytest_cache/
