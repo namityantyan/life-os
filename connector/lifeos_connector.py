@@ -43,7 +43,7 @@ from mt5_adapter import MT5Adapter, MT5Settings  # noqa: E402
 from mt5_common import LOGICAL_SYMBOLS, ConnectorError  # noqa: E402
 from mt5_time import MT5TimeError, validate_time_basis  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 LOG = logging.getLogger("lifeos.fx")
 PAIRS = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"]
 RULES = {"rule_a": "ルールA改良版", "donchian4": "ドンチャン改良4", "donchian6": "ドンチャン改良6"}
@@ -61,7 +61,9 @@ def parse_symbol_map(text: str) -> dict[str, str]:
             raise SystemExit(f"SYMBOL_MAP の書式が正しくありません: {part}")
         logical = f"{m.group(1).upper()}_{m.group(2).upper()}"
         if logical not in LOGICAL_SYMBOLS:
-            raise SystemExit(f"SYMBOL_MAP に対象外の通貨ペアがあります: {logical}")
+            # Pairs outside the 7 traded ones (e.g. carried over from the old connector) are ignored, not fatal.
+            logging.getLogger("lifeos").warning("SYMBOL_MAP の %s は対象外の通貨ペアなので無視します", logical)
+            continue
         out[logical] = m.group(3)
     return out
 

@@ -15,12 +15,12 @@ def test_local_ini_overrides_download_ini_and_state_dir_is_next_to_it(tmp_path, 
     assert cfg.base_url == "https://x.example" and cfg.token == "tok" and cfg.terminal_id == "win-home"
     assert cfg.mt5_login == "12345678" and cfg.mt5_server == "XMTrading-MT5 3" and cfg.time_basis == "utc"
     assert cfg.symbol_map == {"USD_JPY": "USDJPY#", "EUR_JPY": "EURJPY#"}
-    assert cfg.state_dir == tmp_path / "state" and cfg.version == VERSION == "1.0.0"
+    assert cfg.state_dir == tmp_path / "state" and cfg.version == VERSION == "1.0.1"
 
 
 def test_bad_values_are_refused():
-    with pytest.raises(SystemExit):
-        parse_symbol_map("EUR_AUD:EURAUD")
+    # pairs outside the 7 traded ones are ignored (old connector configs listed more pairs)
+    assert parse_symbol_map("EUR_AUD:EURAUD#,USD_JPY:USDJPY#,NZD/USD=NZDUSD#") == {"USD_JPY": "USDJPY#"}
     with pytest.raises(SystemExit):
         parse_symbol_map("garbage")
     assert is_local("http://localhost:5173") and not is_local("https://life-os.example.dev")

@@ -102,7 +102,8 @@ if ($oldRoot) {
     $cfg = Get-Content -LiteralPath (Join-Path $oldRoot "config.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     $mt5Path = [string]$cfg.terminal_path; $mt5Login = [string]$cfg.expected_login; $mt5Server = [string]$cfg.expected_server
     if ($cfg.symbol_map) {
-      $pairs = @(); foreach ($prop in $cfg.symbol_map.PSObject.Properties) { $k = ($prop.Name -replace '[/_]', ''); if ($k.Length -eq 6) { $pairs += ("{0}_{1}:{2}" -f $k.Substring(0,3).ToUpper(), $k.Substring(3,3).ToUpper(), $prop.Value) } }
+      $traded = @("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "EURUSD", "GBPUSD", "AUDUSD")
+      $pairs = @(); foreach ($prop in $cfg.symbol_map.PSObject.Properties) { $k = ($prop.Name -replace '[/_]', '').ToUpper(); if ($traded -contains $k) { $pairs += ("{0}_{1}:{2}" -f $k.Substring(0,3), $k.Substring(3,3), $prop.Value) } }
       $symbolMap = ($pairs -join ",")
     }
     Ok "MT5の設定を引き継ぎました（口座 $mt5Login / $mt5Server）"
@@ -121,7 +122,10 @@ if ($oldRoot) {
 if ($existingLocal["MT5_PATH"]) { $mt5Path = $existingLocal["MT5_PATH"] }
 if ($existingLocal["MT5_LOGIN"]) { $mt5Login = $existingLocal["MT5_LOGIN"] }
 if ($existingLocal["MT5_SERVER"]) { $mt5Server = $existingLocal["MT5_SERVER"] }
-if ($existingLocal["SYMBOL_MAP"]) { $symbolMap = $existingLocal["SYMBOL_MAP"] }
+if ($existingLocal["SYMBOL_MAP"]) {
+  $traded = @("USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY", "EUR_USD", "GBP_USD", "AUD_USD")
+  $symbolMap = (($existingLocal["SYMBOL_MAP"] -split ",") | Where-Object { $_ -match '^\s*([A-Za-z]{3})[_/]?([A-Za-z]{3})\s*[:=]' -and ($traded -contains ("{0}_{1}" -f $Matches[1].ToUpper(), $Matches[2].ToUpper())) }) -join ","
+}
 
 # find MT5 when not known
 if (-not $mt5Path -or -not (Test-Path -LiteralPath $mt5Path)) {
