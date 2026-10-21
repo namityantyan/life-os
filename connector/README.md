@@ -35,12 +35,23 @@ magic 番号は旧コネクターと同じです（A 26061801 / 改良4 26101804
 8. 数量: A・改良4はサーバーの共通lot（Aの追加は開始時のlotを維持）。改良6は予定SL損失＋費用が60 USD以内になる数量へ切り下げ、最小lotでも超えるなら発注しません（サーバー側の想定損失を60より小さくすると、その値を使います）。
 9. 同じフォルダーで2つ起動することはできません（`state/connector.lock`）。
 
-## インストール
+## インストール（かんたん）
 
-1. Python 3.11 以上と MT5（XM）を入れ、MT5にログインし、「アルゴ取引」を有効にします。
-2. Life OS の「FXシグナル → 設定・接続 → かんたん更新・インストール」で zip をダウンロードし、任意のフォルダーに展開します（`lifeos_connector.ini` に接続先とトークンが入っています）。
-3. `install.bat` → `check.bat`。`check.bat` は接続確認だけで注文は出しません。表示の `time_basis_hint` が `TIME_BASIS` と違うときは下の `lifeos_connector.local.ini` で直します。
-4. `run.bat` で常駐させます（1秒ごとに処理、5秒ごとに許可を同期し30秒リースを更新）。
+1. XM の MT5 を起動してログインし、「アルゴ取引」を有効にしておきます。
+2. Life OS の「FXシグナル → 設定・接続 → かんたん更新・インストール」で zip をダウンロードし、展開します（場所はどこでも可）。
+3. 展開したフォルダーの **`LifeOS-FX-Setup.bat` をダブルクリック**します。管理者権限は不要です。
+
+セットアップ（`installer/setup.ps1`）が自動で行うこと:
+
+- 旧コネクター（Life Dashboard XM MT5）を停止し、スタートアップの自動起動を `.disabled` に変えて無効化
+- 旧 `config.json` の MT5 パス・口座番号・サーバー名・銘柄名と、旧 `state/*.json` の台帳を引き継ぎ（既にある台帳は上書きしない）
+- Python 3.12 が無ければ winget（無ければ python.org のインストーラー）で本人用にインストールし、`.venv` に requests / MetaTrader5 を入れる
+- `%LOCALAPPDATA%\LifeOS\fx-connector` に配置し、`--check` で接続確認（注文は出さない）
+- タスクスケジューラに「Life OS FX Connector」を登録（ログイン時に非表示で起動。終了しても15秒後に再起動）し、その場で起動
+- デスクトップに「Life OS FX 接続確認」「Life OS FX 停止」「Life OS FX ログ」を作成
+- 電源接続中のスリープを無効にするか確認（スリープ中は取引の管理が止まるため）
+
+ログは `%LOCALAPPDATA%\LifeOS\fx-connector\state\logs\connector.log` です。
 
 自分用の設定は `lifeos_connector.local.ini` に書きます（zip に含まれないので更新で消えません）:
 
@@ -63,17 +74,17 @@ Life OS の「FXシグナル → 設定・接続」で、ルールA改良版・�
 
 ## 停止理由と解除
 
-停止理由は Life OS の「設定・接続」に表示されます。照合できない注文などで止まったルールは自動では再開しません。MT5の保有・履歴を確認したうえで、`run.bat` を閉じてから:
+停止理由は Life OS の「設定・接続」に表示されます。照合できない注文などで止まったルールは自動では再開しません。MT5の保有・履歴を確認したうえで、デスクトップの「Life OS FX 停止」で止めてから、`%LOCALAPPDATA%\\LifeOS\\fx-connector` で:
 
 ```
-py -3 lifeos_connector.py --clear-stop rule_a      (donchian4 / donchian6)
+.venv\\Scripts\\python.exe lifeos_connector.py --clear-stop rule_a      (donchian4 / donchian6)
 ```
 
 結果未確認の注文が残っている、MT5の保有と台帳が一致しない、などの場合は解除を拒否します。台帳は削除されません。
 
 ## 更新
 
-「かんたん更新・インストール」で新しい zip を取得し、`run.bat` を閉じてから**同じフォルダーに上書き展開**します。`lifeos_connector.local.ini` と `state/` は残ります（`lifeos_connector.ini` は新しい接続設定で置き換わります）。その後 `check.bat` → `run.bat`。
+「かんたん更新・インストール」で新しい zip を取得し、展開して `LifeOS-FX-Setup.bat` をもう一度ダブルクリックします。動いているコネクターは自動で止まり、新しいファイルに入れ替えてから再起動します。`lifeos_connector.local.ini` と `state/` はそのまま残ります。
 
 ## 実行オプション
 

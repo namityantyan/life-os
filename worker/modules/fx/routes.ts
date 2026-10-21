@@ -14,6 +14,12 @@ import ruleAAgentPy from "../../../connector/rule_a_agent.py?raw";
 import donchianAgentPy from "../../../connector/donchian_agent.py?raw";
 import donchianV6AgentPy from "../../../connector/donchian_v6_agent.py?raw";
 import autoStrategiesPy from "../../../connector/auto_strategies.py?raw";
+import setupPs1 from "../../../connector/installer/setup.ps1?raw";
+import setupBat from "../../../connector/installer/LifeOS-FX-Setup.bat?raw";
+import runLoopCmd from "../../../connector/installer/run-loop.cmd?raw";
+import runHiddenVbs from "../../../connector/installer/run-hidden.vbs?raw";
+import checkCmd from "../../../connector/installer/check.cmd?raw";
+import stopCmd from "../../../connector/installer/stop.cmd?raw";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, setSetting, nowIso } from "../../core/db";
@@ -460,16 +466,21 @@ routes.get("/status", async (c) => {
 
 routes.get("/install", async (c) => {
   const origin = c.env.APP_ORIGIN.replace(/\/$/, "");
-  const markdown = `# Windowsコネクターのインストール
+  const markdown = `# Windowsコネクターのインストール・更新
 
-1. Python 3.11 以上と MetaTrader 5（XM）をWindowsにインストールし、MT5にログインしておきます。
-2. コネクター一式（\`connector/\` フォルダー）をWindowsへコピーします。
-3. \`pip install requests MetaTrader5\` を実行します。
-4. 下の「かんたん更新・インストール」で zip をダウンロードし、任意のフォルダーに展開します（\`lifeos_connector.ini\` に接続先とトークンが入っています）。
-5. \`install.bat\`（pip install）→ \`check.bat\` で接続確認（注文は出しません）。
-6. \`run.bat\` で常駐させます。5秒ごとに許可を同期し、30秒リースを更新します。更新時は同じフォルダーに zip を上書き展開します（自分用の設定 \`lifeos_connector.local.ini\` と台帳 \`state/\` は zip に含まれないので残ります）。
+1. XM の MT5 を起動してログインしておきます。
+2. 下の「かんたん更新・インストール」で zip をダウンロードし、展開します（場所はどこでも構いません）。
+3. 展開したフォルダーの \`LifeOS-FX-Setup.bat\` をダブルクリックします。
 
-接続トークンや口座番号をチャットやメールへ貼り付けないでください。更新時は同じフォルダーへ上書きし、台帳（state/*.json）は削除しないでください。
+セットアップが自動で行うこと:
+- 旧コネクター（Life Dashboard XM MT5）を停止し、自動起動を無効にする
+- 旧コネクターの MT5 のパス・口座番号・サーバー名と、台帳（state/*.json）を引き継ぐ
+- Python 3.12 が無ければインストールし、専用の環境に requests / MetaTrader5 を入れる
+- \`%LOCALAPPDATA%\\LifeOS\\fx-connector\` に配置し、接続確認（注文は出しません）
+- Windows ログイン時に自動起動（止まっても15秒後に再起動）し、その場で起動する
+- デスクトップに「接続確認」「停止」「ログ」のショートカットを作る
+
+更新するときも同じ手順です（自分用の設定と台帳は上書きされません）。ルールはこの画面で ON にするまで発注しません。接続トークンや口座番号をチャットやメールへ貼り付けないでください。
 `;
   return c.json({
     markdown,
@@ -478,7 +489,7 @@ routes.get("/install", async (c) => {
       trades: `${origin}/api/integrations/fx/trades`, candles: `${origin}/api/integrations/fx/candles`, quotes: `${origin}/api/integrations/fx/quotes`,
     },
     downloads: [
-      { label: "かんたん更新・インストール (Windows)", url: c.env.FX_CONNECTOR_TOKEN ? "/api/fx/install/download" : null, note: c.env.FX_CONNECTOR_TOKEN ? "接続設定済みの zip。展開して install.bat → check.bat の順に実行" : "サーバーの FX_CONNECTOR_TOKEN が未設定です" },
+      { label: "かんたん更新・インストール (Windows)", url: c.env.FX_CONNECTOR_TOKEN ? "/api/fx/install/download" : null, note: c.env.FX_CONNECTOR_TOKEN ? "接続設定済みの zip。展開して LifeOS-FX-Setup.bat をダブルクリック（旧コネクターの停止・引き継ぎ・Python・自動起動まで自動）" : "サーバーの FX_CONNECTOR_TOKEN が未設定です" },
       { label: "診断用ファイル", url: "/api/fx/install/diagnostics", note: "接続状態・最近の受信・設定を JSON で保存（トークンは含みません）" },
     ],
     token_configured: Boolean(c.env.FX_CONNECTOR_TOKEN),
@@ -509,15 +520,19 @@ routes.get("/install/download", async (c) => {
     "TIME_BASIS=xm_europe",
     "",
   ].join("\r\n");
-  const bat = (body: string) => `@echo off\r\ncd /d "%~dp0"\r\n${body}\r\npause\r\n`;
+  const crlf = (t: string) => t.replace(/\r?\n/g, "\r\n");
   const files: Record<string, Uint8Array> = {
     ...Object.fromEntries(Object.entries(CONNECTOR_MODULES).map(([name, src]) => [`lifeos-connector/${name}`, strToU8(src)])),
     "lifeos-connector/README.md": strToU8(connectorReadme),
     "lifeos-connector/requirements.txt": strToU8(connectorRequirements),
     "lifeos-connector/lifeos_connector.ini": strToU8(ini),
-    "lifeos-connector/install.bat": strToU8(bat("py -3 -m pip install -r requirements.txt")),
-    "lifeos-connector/check.bat": strToU8(bat("py -3 lifeos_connector.py --check")),
-    "lifeos-connector/run.bat": strToU8(bat("py -3 lifeos_connector.py")),
+    // One-click installer. Windows scripts need CRLF; Windows PowerShell 5.1 needs a UTF-8 BOM to read Japanese text.
+    "lifeos-connector/LifeOS-FX-Setup.bat": strToU8(crlf(setupBat)),
+    "lifeos-connector/installer/setup.ps1": strToU8("\uFEFF" + crlf(setupPs1)),
+    "lifeos-connector/installer/run-loop.cmd": strToU8(crlf(runLoopCmd)),
+    "lifeos-connector/installer/run-hidden.vbs": strToU8(crlf(runHiddenVbs)),
+    "lifeos-connector/installer/check.cmd": strToU8(crlf(checkCmd)),
+    "lifeos-connector/installer/stop.cmd": strToU8(crlf(stopCmd)),
   };
   const zip = zipSync(files, { level: 6 });
   return new Response(zip, { headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="lifeos-connector-${new Date().toISOString().slice(0, 10)}.zip"`, "Cache-Control": "no-store" } });

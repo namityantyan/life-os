@@ -111,7 +111,7 @@ test("heartbeat + setup signal + candles → 準備OK · BUY, chart renders, tra
 
   // settings round-trip
   await page.goto("/fx/settings");
-  await expect(page.getByTestId("fx-install-md")).toContainText("lifeos_connector.ini");
+  await expect(page.getByTestId("fx-install-md")).toContainText("LifeOS-FX-Setup.bat");
   const lot = page.getByTestId("fx-common-lot");
   await lot.fill("0.31");
   await page.getByTestId("fx-stop-reasons").fill("理由A\n理由B");
@@ -133,10 +133,11 @@ test("install: connector zip and diagnostics download from the settings tab", as
   const text = bytes.toString("latin1");
   expect(text).toContain("lifeos-connector/lifeos_connector.py");
   expect(text).toContain("lifeos-connector/lifeos_connector.ini");
-  expect(text).toContain("lifeos-connector/check.bat");
+  expect(text).toContain("lifeos-connector/LifeOS-FX-Setup.bat");
+  for (const f of ["setup.ps1", "run-loop.cmd", "run-hidden.vbs", "check.cmd", "stop.cmd"]) expect(text).toContain(`lifeos-connector/installer/${f}`);
   // connector 1.0.0: every Python module the Windows side needs, plus requirements.txt (fake broker and tests are not shipped)
   for (const f of ["lifeos_agent.py", "mt5_adapter.py", "mt5_common.py", "mt5_time.py", "rule_a_engine.py", "donchian_engine.py", "donchian_v6_engine.py",
-    "rule_a_agent.py", "donchian_agent.py", "donchian_v6_agent.py", "auto_strategies.py", "requirements.txt", "install.bat", "run.bat", "README.md"]) {
+    "rule_a_agent.py", "donchian_agent.py", "donchian_v6_agent.py", "auto_strategies.py", "requirements.txt", "README.md"]) {
     expect(text).toContain(`lifeos-connector/${f}`);
   }
   expect(text).not.toContain("lifeos-connector/fake_mt5.py");
