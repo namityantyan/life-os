@@ -201,3 +201,42 @@ test("meal chat proposal: review card applies entries and targets to the day", a
   await page.request.delete(`/api/health/meals/day/${day}`, { headers: H });
   await page.request.delete(`/api/health/meals/foods/${savedFood.id}`, { headers: H });
 });
+
+test("成分表: typing a food fills nutrition from the table, and grams can be corrected", async ({ authed: page }) => {
+  const H = { Origin: "http://localhost:5173" };
+  const day = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+
+  // API: lookup and auto-fill without the AI (exact / alias names with grams)
+  const lk = await (await page.request.post("/api/health/meals/lookup", { headers: H, data: { name: "ゆで卵", amount: 100, unit: "g" } })).json();
+  expect(lk.match).toMatchObject({ number: "12005", grams: 100 });
+  expect(lk.match.nutrition.energy_kcal).toBe(134);
+
+  await page.goto("/health#meal");
+  await page.getByRole("tab", { name: "食事" }).click();
+  await page.getByTestId("entry-add").click();
+  await page.getByTestId("entry-name").fill("ごはん");
+  await page.getByRole("dialog").getByPlaceholder("150").fill("200");
+  await page.getByRole("dialog").getByPlaceholder("g / 個 / 杯").fill("g");
+  await expect(page.getByTestId("table-match")).toHaveText("こめ [水稲めし] 精白米 うるち米", { timeout: 15_000 });
+  await expect(page.getByTestId("table-lookup")).toContainText("312 kcal");
+
+  // correcting the grams recomputes and syncs the amount
+  await page.getByTestId("table-grams").fill("150");
+  await page.getByTestId("table-grams").blur();
+  await expect(page.getByTestId("table-lookup")).toContainText("234 kcal");
+  await expect(page.getByRole("dialog").getByPlaceholder("150")).toHaveValue("150");
+
+  const saveFood = page.getByTestId("entry-save-food");
+  if (await saveFood.isChecked()) await saveFood.uncheck();
+  await page.getByTestId("entry-save").click();
+  const row = page.getByTestId("meal-item").filter({ hasText: "ごはん" }).last();
+  await expect(row).toContainText("成分表");
+  await expect(row).toContainText("234 kcal");
+  await expect(row.getByTestId("entry-ref")).toContainText("精白米 うるち米 150g");
+
+  const log = await (await page.request.get(`/api/health/meals/day?day=${day}`)).json();
+  const entry = log.entries.filter((e: any) => e.food_name === "ごはん").pop();
+  expect(entry.nutrition_source).toBe("table");
+  expect(entry.nutrition_ref).toMatchObject({ number: "01088", grams: 150 });
+  await page.request.delete(`/api/health/meals/entries/${entry.id}`, { headers: H });
+});

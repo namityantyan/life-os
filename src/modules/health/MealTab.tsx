@@ -2,7 +2,7 @@
  * 食事: a log of what was actually eaten each day. Saved sets ("いつもの食事") and saved foods
  * ("よく食べるもの") are added with one tap; nutrition is copied into the entry at that moment.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Badge, Button, Card, ChatPanel, EmptyState, ErrorBanner, Field, IconButton, Input, Item, Modal,
@@ -11,10 +11,11 @@ import {
 import { api, useApi, fmtNum, fmtYen, fmtDate, todayJst } from "@/lib/api";
 import { ALL_NUTRIENTS, EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, nutrientLabel, numOrNull, type ChatItem, type Nutrition } from "./shared";
 
-type Food = { id: string; name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; cost_per_serving: number | null; use_count: number };
+type TableRef = { number: string; name: string; grams: number; grams_estimated?: boolean };
+type Food = { id: string; name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; nutrition_ref: TableRef | null; cost_per_serving: number | null; use_count: number };
 type SetItem = { id: string; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; cost_per_serving: number | null };
 type MealSet = { id: string; name: string; items: SetItem[]; nutrition: { totals: Record<string, number | null>; partial: boolean }; cost: { total: number | null; missing: number } };
-type Entry = { id: string; day: string; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; cost: number | null; servings: number };
+type Entry = { id: string; day: string; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; nutrition_ref: TableRef | null; cost: number | null; servings: number };
 type Summary = { nutrition: { totals: Record<string, number | null>; partial: boolean; item_count: number; with_nutrition: number; estimated_count: number }; cost: { total: number | null; counted: number; missing: number }; targets: Nutrition };
 type DayRes = { day: string; entries: Entry[]; summary: Summary; foods: Food[]; sets: MealSet[] };
 
@@ -26,6 +27,15 @@ const dayLabel = (day: string) => {
   const d = new Date(day + "T00:00:00Z");
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${["日", "月", "火", "水", "木", "金", "土"][d.getUTCDay()]}）`;
 };
+
+const SOURCE_BADGE: Record<string, { label: string; tone: "green" | "accent" | "purple" }> = {
+  recorded: { label: "記録", tone: "green" }, table: { label: "成分表", tone: "purple" }, estimated: { label: "推定", tone: "accent" },
+};
+function SourceBadge({ source }: { source: string | null }) {
+  const b = source ? SOURCE_BADGE[source] : null;
+  return b ? <Badge tone={b.tone}>{b.label}</Badge> : <Badge>栄養未計算</Badge>;
+}
+const TABLE_CREDIT = "栄養値の出典: 文部科学省「日本食品標準成分表（八訂）増補2023年」（可食部100gあたりの値から量に合わせて計算）";
 
 /* ---------------------------------------------------------------- chat */
 function useChat(channel: "meal") {
@@ -88,17 +98,26 @@ export function MealTab() {
     try { apply(await api.del<DayRes>(`/health/meals/entries/${e.id}`)); toast("削除しました"); }
     catch (err: any) { toast(err?.message ?? "削除できませんでした", "error"); }
   };
+  /** Fill an entry from the 成分表; if no table food fits, fall back to an AI estimate (marked 推定). */
   const estimateEntry = async (e: Entry) => {
     setEstimating(e.id);
     try {
-      let r = await api.post<{ applied: boolean; reason?: string }>(`/health/meals/entry/${e.id}/estimate`, {});
-      if (!r.applied && r.reason === "recorded") {
-        if (!confirm(`「${e.food_name}」には記録済みの栄養値があります。推定値で上書きしますか？`)) return;
-        r = await api.post(`/health/meals/entry/${e.id}/estimate`, { confirm: true });
+      let t = await api.post<{ applied: boolean; reason?: string; match?: { name: string; grams: number } }>(`/health/meals/entry/${e.id}/table`, {});
+      if (!t.applied && t.reason === "recorded") {
+        if (!confirm(`「${e.food_name}」には記録済みの栄養値があります。成分表の値で上書きしますか？`)) return;
+        t = await api.post(`/health/meals/entry/${e.id}/table`, { confirm: true });
       }
-      if (r.applied) { toast("推定値を保存しました", "success"); reload(); }
-      else if (r.reason === "ai_unavailable") toast("AIに接続できないため推定できません", "error");
-    } catch (err: any) { toast(err?.message ?? "推定に失敗しました", "error"); } finally { setEstimating(null); }
+      if (t.applied) { toast(`成分表「${t.match?.name}」${fmtNum(t.match?.grams)}gで計算しました`, "success"); reload(); return; }
+      const r = await api.post<{ applied: boolean; reason?: string }>(`/health/meals/entry/${e.id}/estimate`, {});
+      if (r.applied) { toast("成分表に無いため、AIの推定値を入れました", "success"); reload(); }
+      else toast(r.reason === "ai_unavailable" ? "成分表に見つからず、AIにも接続できませんでした" : "栄養を計算できませんでした", "error");
+    } catch (err: any) { toast(err?.message ?? "計算に失敗しました", "error"); } finally { setEstimating(null); }
+  };
+  const recalcFoods = async () => {
+    try {
+      const r = await api.post<{ updated: number; skipped: number }>("/health/meals/foods/recalc", {});
+      toast(`成分表で${r.updated}件を計算しました${r.skipped ? `（${r.skipped}件は該当なし）` : ""}`, "success"); reload();
+    } catch (e: any) { toast(e?.message ?? "計算できませんでした", "error"); }
   };
   const clearDay = async () => {
     if (!confirm(`${dayLabel(day)}の記録をすべて削除しますか？`)) return;
@@ -158,7 +177,10 @@ export function MealTab() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-label-2">よく食べるもの</span>
-                <Button size="sm" variant="ghost" onClick={() => setFoodEditing("new")} data-testid="food-add">登録を追加</Button>
+                <div className="flex gap-1">
+                  {savedFoods.some((f) => f.nutrition_source !== "recorded" && f.nutrition_source !== "table") && <Button size="sm" variant="ghost" onClick={recalcFoods} data-testid="foods-recalc">成分表で計算</Button>}
+                  <Button size="sm" variant="ghost" onClick={() => setFoodEditing("new")} data-testid="food-add">登録を追加</Button>
+                </div>
               </div>
               {savedFoods.length === 0 ? <p className="text-sm text-label-3">まだありません。食べたものを記録するとき「よく食べるものに登録」を選ぶと、次から1タップで追加できます。</p> : (
                 <div className="flex flex-wrap gap-2" data-testid="food-buttons">
@@ -191,11 +213,12 @@ export function MealTab() {
                         <span className="font-medium truncate">{e.food_name}</span>
                         {e.servings !== 1 && <Badge>×{fmtNum(e.servings, 1)}</Badge>}
                         {e.amount != null && <span className="text-sm text-label-2 tabular">{fmtNum(e.amount, 1)}{e.unit ?? ""}</span>}
-                        {e.nutrition_source === "recorded" ? <Badge tone="green">記録</Badge> : e.nutrition_source === "estimated" ? <Badge tone="accent">推定</Badge> : <Badge>栄養未計算</Badge>}
+                        <SourceBadge source={e.nutrition_source} />
                       </div>
                       <div className="text-xs text-label-3 tabular">{e.nutrition ? `${fmtNum(e.nutrition.energy_kcal)} kcal・P ${fmtNum(e.nutrition.protein_g)}・F ${fmtNum(e.nutrition.fat_g)}・C ${fmtNum(e.nutrition.carbs_g)}` : "—"}・{e.cost == null ? "費用未入力" : fmtYen(e.cost)}</div>
+                      {e.nutrition_ref && <div className="text-[0.6875rem] text-label-3 truncate" data-testid="entry-ref">成分表: {e.nutrition_ref.name} {fmtNum(e.nutrition_ref.grams)}g{e.nutrition_ref.grams_estimated ? "（量はAIの見積もり）" : ""}{e.servings !== 1 ? ` ×${fmtNum(e.servings, 1)}` : ""}</div>}
                     </div>
-                    {!e.nutrition && <Button size="sm" variant="ghost" onClick={() => estimateEntry(e)} loading={estimating === e.id} aria-label={`${e.food_name}の栄養をAIで推定`} data-testid="meal-estimate">AI推定</Button>}
+                    {e.nutrition_source !== "table" && e.nutrition_source !== "recorded" && <Button size="sm" variant="ghost" onClick={() => estimateEntry(e)} loading={estimating === e.id} aria-label={`${e.food_name}の栄養を成分表で計算`} data-testid="meal-estimate">成分表で計算</Button>}
                     <Button size="sm" variant="ghost" onClick={() => setEditing(e)} aria-label={`${e.food_name}を編集`}>編集</Button>
                     <IconButton label={`${e.food_name}を削除`} className="text-red hover:text-red" onClick={() => removeEntry(e)}>✕</IconButton>
                   </Item>
@@ -203,6 +226,7 @@ export function MealTab() {
               </Stagger>
             </Card>
           )}
+          <p className="text-[0.6875rem] text-label-3 px-1">{TABLE_CREDIT}</p>
           {(history.data?.items.length ?? 0) > 1 && (
             <div className="flex flex-wrap gap-2 pt-1" data-testid="day-history">
               {history.data!.items.map((h) => (
@@ -322,15 +346,105 @@ function ProposalCard({ item, entries, targets, day, onApplied }: {
   );
 }
 
+/* ---------------------------------------------------------------- 成分表 lookup panel */
+type LookupMatch = { number: string; name: string; grams: number; grams_estimated: boolean; nutrition: Nutrition };
+type TableValue = { nutrition: Nutrition; ref: TableRef } | null;
+
+/**
+ * Looks the typed food up in the 成分表 as the user types (debounced), shows the matched food and
+ * grams, and lets the user switch to another candidate or correct the grams. Reports the result upward.
+ */
+function TableLookup({ name, amount, unit, onChange, onGrams, disabled }: { name: string; amount: string; unit: string; onChange: (v: TableValue) => void; onGrams?: (grams: number) => void; disabled?: boolean }) {
+  const [state, setState] = useState<{ loading: boolean; match: LookupMatch | null; candidates: { number: string; name: string }[]; note?: string }>({ loading: false, match: null, candidates: [] });
+  const [grams, setGrams] = useState("");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<{ number: string; name: string }[]>([]);
+  const [open, setOpen] = useState(false);
+  const lastAuto = useRef<string>("");
+  useEffect(() => {
+    if (disabled || !name.trim()) { setState({ loading: false, match: null, candidates: [] }); onChange(null); return; }
+    const key = `${name.trim()}|${amount}|${unit}`;
+    if (key === lastAuto.current) return; // amount was just synced from a grams edit
+    lastAuto.current = key;
+    let alive = true;
+    const t = setTimeout(async () => {
+      setState((s) => ({ ...s, loading: true }));
+      try {
+        const r = await api.post<{ match: LookupMatch | null; candidates: { number: string; name: string }[]; note?: string }>("/health/meals/lookup", { name: name.trim(), amount: numOrNull(amount), unit: unit.trim() || null });
+        if (!alive) return;
+        setState({ loading: false, match: r.match, candidates: r.candidates, note: r.note });
+        setGrams(r.match ? String(r.match.grams) : "");
+        onChange(r.match ? { nutrition: r.match.nutrition, ref: { number: r.match.number, name: r.match.name, grams: r.match.grams, grams_estimated: r.match.grams_estimated } } : null);
+      } catch { if (alive) setState({ loading: false, match: null, candidates: [], note: "成分表を検索できませんでした" }); }
+    }, 700);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, amount, unit, disabled]);
+  useEffect(() => {
+    if (!open || !query.trim()) { setResults([]); return; }
+    const t = setTimeout(async () => { try { setResults((await api.get<{ items: { number: string; name: string }[] }>(`/health/meals/table/search?q=${encodeURIComponent(query.trim())}`)).items); } catch { setResults([]); } }, 300);
+    return () => clearTimeout(t);
+  }, [query, open]);
+  const choose = async (number: string, g?: number) => {
+    const gramsN = g ?? (numOrNull(grams) ?? state.match?.grams ?? 100);
+    const r = await api.post<{ number: string; name: string; grams: number; nutrition: Nutrition }>("/health/meals/table/compute", { number, grams: gramsN });
+    const m = { number: r.number, name: r.name, grams: r.grams, grams_estimated: false, nutrition: r.nutrition };
+    setState((s) => ({ ...s, match: m })); setGrams(String(r.grams)); setOpen(false);
+    onChange({ nutrition: m.nutrition, ref: { number: m.number, name: m.name, grams: m.grams, grams_estimated: false } });
+    if (g != null && onGrams) {
+      const isGramUnit = !unit.trim() || /^(g|ｇ|グラム|ml|mL|cc)$/.test(unit.trim());
+      if (isGramUnit) { lastAuto.current = `${name.trim()}|${r.grams}|${unit.trim() || "g"}`; onGrams(r.grams); }
+    }
+  };
+  if (disabled || !name.trim()) return null;
+  const m = state.match;
+  return (
+    <div className="rounded-[var(--radius-md)] bg-subtle p-3 space-y-2 text-sm" data-testid="table-lookup">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">成分表から計算</span>
+        {state.loading && <span className="text-xs text-label-3">検索中…</span>}
+      </div>
+      {m ? (
+        <>
+          <div className="flex items-start gap-2">
+            <Badge tone="purple">成分表</Badge>
+            <span className="min-w-0 flex-1" data-testid="table-match">{m.name}</span>
+          </div>
+          <div className="grid grid-cols-[auto_6rem_auto] items-center gap-2">
+            <span className="text-xs text-label-2">可食部</span>
+            <Input inputMode="decimal" value={grams} onChange={(e) => setGrams(e.target.value)} onBlur={() => { const g = numOrNull(grams); if (g && g > 0 && g !== m.grams) choose(m.number, g); }} aria-label="可食部のグラム数" data-testid="table-grams" className="h-8" />
+            <span className="text-xs text-label-2">g{m.grams_estimated ? "（量からAIが見積もり。違えば直してください）" : ""}</span>
+          </div>
+          <div className="text-xs text-label-2 tabular">{fmtNum(m.nutrition.energy_kcal)} kcal・たんぱく質 {fmtNum(m.nutrition.protein_g, 1)}g・脂質 {fmtNum(m.nutrition.fat_g, 1)}g・炭水化物 {fmtNum(m.nutrition.carbs_g, 1)}g・食塩 {fmtNum(m.nutrition.salt_g, 1)}g</div>
+        </>
+      ) : !state.loading ? <p className="text-xs text-label-2">{state.note ?? "該当する食品が見つかりませんでした。"}</p> : null}
+      <div className="flex flex-wrap gap-1.5">
+        {state.candidates.filter((c) => c.number !== m?.number).slice(0, 4).map((c) => (
+          <button key={c.number} type="button" onClick={() => choose(c.number)} className="focus-ring rounded-full bg-fill px-2.5 py-1 text-xs text-label-2 hover:text-label max-w-full truncate" data-testid="table-candidate">{c.name}</button>
+        ))}
+        <button type="button" onClick={() => setOpen((v) => !v)} className="focus-ring rounded-full px-2.5 py-1 text-xs text-accent">{open ? "閉じる" : "別の食品を探す"}</button>
+      </div>
+      {open && (
+        <div className="space-y-1.5">
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="成分表で検索（例: 鶏卵 ゆで）" autoFocus data-testid="table-search" className="h-9" />
+          <ul className="max-h-48 overflow-y-auto space-y-0.5">
+            {results.map((r) => <li key={r.number}><button type="button" onClick={() => choose(r.number)} className="w-full text-left rounded px-2 py-1.5 text-xs hover:bg-fill">{r.name}</button></li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- modals */
 function NutritionFields({ n, setN }: { n: Record<string, string>; setN: (v: Record<string, string>) => void }) {
   return (
     <details className="rounded-[var(--radius-md)] bg-subtle p-3">
-      <summary className="text-sm font-medium cursor-pointer">栄養を手入力（記録値）</summary>
+      <summary className="text-sm font-medium cursor-pointer">栄養を手入力（成分表を使わない場合）</summary>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
         {ALL_NUTRIENTS.map((x) => <Field key={x.key} label={`${x.label} (${x.unit})`}><Input inputMode="decimal" value={n[x.key] ?? ""} onChange={(e) => setN({ ...n, [x.key]: e.target.value })} /></Field>)}
       </div>
-      <p className="text-xs text-label-3 mt-2">空欄のままなら「AI推定」で埋められます。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
+      <p className="text-xs text-label-3 mt-2">空欄のままなら成分表から計算します。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
     </details>
   );
 }
@@ -347,22 +461,31 @@ function EntryModal({ entry, day, foods, onClose, onSaved }: { entry: Entry | "n
   const [n, setN] = useState<Record<string, string>>({});
   const [save, setSave] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [tableValue, setTableValue] = useState<TableValue>(null);
+  const [fromFood, setFromFood] = useState<Food | null>(null);
   const isEdit = entry && entry !== "new";
+  const manual = Object.values(n).some((v) => v.trim() !== "");
   useEffect(() => {
     if (isEdit) { setF({ food_name: entry.food_name, amount: entry.amount != null ? String(entry.amount) : "", unit: entry.unit ?? "", cost: entry.cost != null ? String(entry.cost) : "", servings: String(entry.servings) }); setN(Object.fromEntries(Object.entries(entry.nutrition ?? {}).map(([k, v]) => [k, String(v)]))); setSave(false); }
     else { setF({ food_name: "", amount: "", unit: "", cost: "", servings: "1" }); setN({}); setSave(true); }
+    setTableValue(null); setFromFood(null);
   }, [entry, isEdit]);
   const pick = (name: string) => {
     const src = foods.find((x) => x.name === name); if (!src) return;
     setF((p) => ({ ...p, food_name: src.name, amount: src.amount != null ? String(src.amount) : "", unit: src.unit ?? "", cost: src.cost_per_serving != null ? String(src.cost_per_serving) : "" }));
-    setN(Object.fromEntries(Object.entries(src.nutrition ?? {}).map(([k, v]) => [k, String(v)])));
-    setSave(false);
+    // keep the saved food's own values (and their source) instead of looking it up again
+    setN(src.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(src.nutrition ?? {}).map(([k, v]) => [k, String(v)])) : {});
+    setFromFood(src); setSave(false);
   };
   const submit = async () => {
     if (!f.food_name.trim()) return;
     const nutrition = collectNutrition(n);
     const body: Record<string, unknown> = { day, food_name: f.food_name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost: numOrNull(f.cost) };
-    if (Object.keys(nutrition).length || isEdit) body.nutrition = Object.keys(nutrition).length ? nutrition : null;
+    if (Object.keys(nutrition).length) { body.nutrition = nutrition; body.nutrition_source = "recorded"; }
+    else if (fromFood && fromFood.name === f.food_name.trim() && fromFood.nutrition) { body.nutrition = fromFood.nutrition; body.nutrition_source = fromFood.nutrition_source; body.nutrition_ref = fromFood.nutrition_ref ? JSON.stringify(fromFood.nutrition_ref) : null; body.food_id = fromFood.id; }
+    else if (tableValue) { body.nutrition = tableValue.nutrition; body.nutrition_source = "table"; body.nutrition_ref = JSON.stringify(tableValue.ref); }
+    else if (isEdit) body.nutrition = null;
+    body.auto_nutrition = false; // the panel already did the lookup (or the user chose not to)
     setSaving(true);
     try {
       const res = isEdit ? await api.put<DayRes>(`/health/meals/entries/${entry.id}`, body) : await api.post<DayRes>("/health/meals/entries", { ...body, servings: Number(f.servings) || 1, save_as_food: save });
@@ -388,7 +511,10 @@ function EntryModal({ entry, day, foods, onClose, onSaved }: { entry: Entry | "n
             <label className="flex items-center gap-2 text-sm pb-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={save} onChange={(e) => setSave(e.target.checked)} data-testid="entry-save-food" />よく食べるものに登録</label>
           </div>
         )}
+        <TableLookup name={f.food_name} amount={f.amount} unit={f.unit} onChange={setTableValue} onGrams={(g) => setF((p) => ({ ...p, amount: String(g), unit: p.unit.trim() || "g" }))}
+          disabled={manual || Boolean(fromFood && fromFood.name === f.food_name.trim() && fromFood.nutrition)} />
         <NutritionFields n={n} setN={setN} />
+        {manual && <p className="text-xs text-label-3">手入力した栄養値を使います（成分表の計算は使いません）。</p>}
       </div>
     </Modal>
   );
@@ -399,16 +525,24 @@ function FoodModal({ food, onClose, onSaved }: { food: Food | "new" | null; onCl
   const [f, setF] = useState({ name: "", amount: "", unit: "", cost: "" });
   const [n, setN] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [tableValue, setTableValue] = useState<TableValue>(null);
   const isEdit = food && food !== "new";
+  // Only values the user typed by hand count as 記録; table / estimated values are recomputed.
+  const manual = Object.values(n).some((v) => v.trim() !== "");
   useEffect(() => {
-    if (isEdit) { setF({ name: food.name, amount: food.amount != null ? String(food.amount) : "", unit: food.unit ?? "", cost: food.cost_per_serving != null ? String(food.cost_per_serving) : "" }); setN(Object.fromEntries(Object.entries(food.nutrition ?? {}).map(([k, v]) => [k, String(v)]))); }
+    if (isEdit) { setF({ name: food.name, amount: food.amount != null ? String(food.amount) : "", unit: food.unit ?? "", cost: food.cost_per_serving != null ? String(food.cost_per_serving) : "" }); setN(food.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(food.nutrition ?? {}).map(([k, v]) => [k, String(v)])) : {}); }
     else { setF({ name: "", amount: "", unit: "", cost: "" }); setN({}); }
+    setTableValue(null);
   }, [food, isEdit]);
   const submit = async () => {
     if (!f.name.trim()) return;
     const nutrition = collectNutrition(n);
-    const body: Record<string, unknown> = { name: f.name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost_per_serving: numOrNull(f.cost) };
-    if (Object.keys(nutrition).length || isEdit) body.nutrition = Object.keys(nutrition).length ? nutrition : null;
+    const body: Record<string, unknown> = { name: f.name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost_per_serving: numOrNull(f.cost), auto_nutrition: false };
+    if (Object.keys(nutrition).length) { body.nutrition = nutrition; body.nutrition_source = "recorded"; }
+    else if (tableValue) { body.nutrition = tableValue.nutrition; body.nutrition_source = "table"; body.nutrition_ref = JSON.stringify(tableValue.ref); }
+    // Editing with nothing typed and no table match: keep what is stored, except that clearing
+    // hand-entered (recorded) values means "remove them".
+    else if (isEdit && food.nutrition_source === "recorded") body.nutrition = null;
     setSaving(true);
     try { if (isEdit) await api.put(`/health/meals/foods/${food.id}`, body); else await api.post("/health/meals/foods", body); toast("保存しました", "success"); onSaved(); }
     catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
@@ -427,6 +561,7 @@ function FoodModal({ food, onClose, onSaved }: { food: Food | "new" | null; onCl
           <Field label="単位"><Input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} placeholder="個" /></Field>
           <Field label="1回分の費用（円）"><Input inputMode="decimal" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} placeholder="未入力" /></Field>
         </div>
+        <TableLookup name={f.name} amount={f.amount} unit={f.unit} onChange={setTableValue} onGrams={(g) => setF((p) => ({ ...p, amount: String(g), unit: p.unit.trim() || "g" }))} disabled={manual} />
         <NutritionFields n={n} setN={setN} />
       </div>
     </Modal>

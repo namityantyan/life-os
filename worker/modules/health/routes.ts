@@ -8,6 +8,7 @@ import { adviseWithContext, buildLifeContext, suggestAction } from "../../core/c
 import { fetchWeather, type WeatherSnapshot } from "../../core/weather";
 import { syncOura } from "./oura";
 import { mealRoutes, dayLog } from "./meals";
+import { lookupFood } from "./food-table";
 import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
 
 export const routes = new Hono<AppEnv>();
@@ -153,15 +154,20 @@ routes.post("/meals/apply-proposal", async (c) => {
   let order = (await one<{ n: number }>(c.env.DB, "SELECT COALESCE(MAX(sort_order),-1)+1 n FROM meal_entries WHERE user_id=? AND day=?", user.id, day))?.n ?? 0;
   for (const op of norm.entries) {
     if (op.op === "add") {
-      const hasN = op.nutrition && Object.keys(op.nutrition).length > 0;
-      stmts.push(c.env.DB.prepare("INSERT INTO meal_entries (id,user_id,day,food_name,amount,unit,nutrition_json,nutrition_source,cost,servings,sort_order) VALUES (?,?,?,?,?,?,?,?,?,1,?)")
-        .bind(newId(), user.id, day, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(op.nutrition) : null, hasN ? "estimated" : null, op.cost, order++));
+      // Prefer 成分表 values over the AI's guess; fall back to the guess (marked estimated).
+      const t = await lookupFood(c.env, { name: op.food_name, amount: op.amount, unit: op.unit }).catch(() => null);
+      const nutrition = t?.match?.nutrition ?? (op.nutrition && Object.keys(op.nutrition).length ? op.nutrition : null);
+      const source = t?.match ? "table" : nutrition ? "estimated" : null;
+      const ref = t?.match ? JSON.stringify({ number: t.match.number, name: t.match.name, grams: t.match.grams, grams_estimated: t.match.grams_estimated }) : null;
+      const hasN = Boolean(nutrition);
+      stmts.push(c.env.DB.prepare("INSERT INTO meal_entries (id,user_id,day,food_name,amount,unit,nutrition_json,nutrition_source,nutrition_ref,cost,servings,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)")
+        .bind(newId(), user.id, day, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(nutrition) : null, source, ref, op.cost, order++));
       if (op.save_as_food) {
         const dup = await one<{ id: string }>(c.env.DB, "SELECT id FROM meal_foods WHERE user_id=? AND name=? AND archived_at IS NULL", user.id, op.food_name);
         stmts.push(dup
           ? c.env.DB.prepare("UPDATE meal_foods SET use_count=use_count+1, last_used_at=datetime('now') WHERE id=?").bind(dup.id)
-          : c.env.DB.prepare("INSERT INTO meal_foods (id,user_id,name,amount,unit,nutrition_json,nutrition_source,cost_per_serving,use_count,last_used_at) VALUES (?,?,?,?,?,?,?,?,1,datetime('now'))")
-              .bind(newId(), user.id, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(op.nutrition) : null, hasN ? "estimated" : null, op.cost));
+          : c.env.DB.prepare("INSERT INTO meal_foods (id,user_id,name,amount,unit,nutrition_json,nutrition_source,nutrition_ref,cost_per_serving,use_count,last_used_at) VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now'))")
+              .bind(newId(), user.id, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(nutrition) : null, source, ref, op.cost));
       }
       done.added++;
     } else if (op.op === "update") {
