@@ -30,3 +30,8 @@ export async function setSetting(env: Env, userId: string, key: string, value: u
 export function jstNow(): Date { return new Date(Date.now() + 9 * 3600 * 1000); }
 export function jstDate(d = jstNow()): string { return d.toISOString().slice(0, 10); }
 export function jstHour(d = jstNow()): number { return d.getUTCHours(); }
+
+/** Best-effort KV cache write. KV's free tier allows 1,000 writes/day; a cache miss must never break a page. */
+export async function kvPutSafe(env: Env, key: string, value: string, opts?: KVNamespacePutOptions): Promise<boolean> {
+  try { await env.KV.put(key, value, opts); return true; } catch (e) { console.warn("kv put skipped", key, String(e)); return false; }
+}

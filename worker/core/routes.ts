@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import type { NotificationPrefs, WeatherLocation } from "../../shared/types";
-import { all, run, one, getSetting, setSetting } from "./db";
+import { all, run, one, getSetting, setSetting, kvPutSafe } from "./db";
 import { DEFAULT_PREFS, notify, processQueue } from "./notify";
 import { fetchWeather, WEATHER_CODE_LABEL } from "./weather";
 import { buildLifeContext, suggestAction } from "./context";
@@ -86,7 +86,7 @@ coreRoutes.get("/weather", async (c) => {
   try {
     const w = await fetchWeather(loc);
     const out = { ...w, weather_label: w.weather_code != null ? (WEATHER_CODE_LABEL[w.weather_code] ?? "—") : null };
-    await c.env.KV.put(cacheKey, JSON.stringify(out), { expirationTtl: 600 });
+    await kvPutSafe(c.env, cacheKey, JSON.stringify(out), { expirationTtl: 600 });
     return c.json({ configured: true, ...out });
   } catch (e) { return c.json({ configured: true, error: String(e) }, 502); }
 });

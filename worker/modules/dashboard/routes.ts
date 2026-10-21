@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../../env";
 import type { WeatherLocation } from "../../../shared/types";
-import { all, getSetting } from "../../core/db";
+import { all, getSetting, kvPutSafe } from "../../core/db";
 import { buildLifeContext, dailyHint } from "../../core/context";
 import { fetchWeather, WEATHER_CODE_LABEL, type WeatherSnapshot } from "../../core/weather";
 
@@ -20,7 +20,7 @@ routes.get("/", async (c) => {
     const cached = await c.env.KV.get(key, "json");
     if (cached) weather = cached as any;
     else {
-      try { const w = await fetchWeather(loc); weather = { ...w, weather_label: w.weather_code != null ? (WEATHER_CODE_LABEL[w.weather_code] ?? "—") : null }; await c.env.KV.put(key, JSON.stringify(weather), { expirationTtl: 600 }); }
+      try { const w = await fetchWeather(loc); weather = { ...w, weather_label: w.weather_code != null ? (WEATHER_CODE_LABEL[w.weather_code] ?? "—") : null }; await kvPutSafe(c.env, key, JSON.stringify(weather), { expirationTtl: 600 }); }
       catch (e) { weatherError = String(e); }
     }
   }

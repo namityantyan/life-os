@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import type { WeatherLocation } from "../../../shared/types";
-import { all, one, run, newId, getSetting, setSetting, jstDate } from "../../core/db";
+import { all, one, run, newId, getSetting, setSetting, jstDate, kvPutSafe } from "../../core/db";
 import { chatJson } from "../../core/ai";
 import { adviseWithContext, buildLifeContext, suggestAction } from "../../core/context";
 import { fetchWeather, type WeatherSnapshot } from "../../core/weather";
@@ -20,7 +20,7 @@ async function weatherCached(env: Env, userId: string): Promise<WeatherSnapshot 
     const cached = (await env.KV.get(key, "json")) as WeatherSnapshot | null;
     if (cached?.pressure_series) return cached;
     const w = await fetchWeather(loc);
-    await env.KV.put(key, JSON.stringify(w), { expirationTtl: 600 });
+    await kvPutSafe(env, key, JSON.stringify(w), { expirationTtl: 600 });
     return w;
   } catch { return null; }
 }

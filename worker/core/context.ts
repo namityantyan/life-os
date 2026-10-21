@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import type { LifeContext, WeatherLocation } from "../../shared/types";
-import { all, one, getSetting, jstDate, jstNow } from "./db";
+import { all, one, getSetting, jstDate, jstNow, kvPutSafe } from "./db";
 import { fetchWeather } from "./weather";
 import { chat } from "./ai";
 
@@ -127,6 +127,6 @@ export async function dailyHint(env: Env, userId: string, ctx: LifeContext): Pro
   if (r.provider !== "workers-ai") return { text: base, source: "rules" };
   const text = r.text.replace(/^["「]|["」]$/g, "").split("\n")[0].trim().slice(0, 90);
   if (!text) return { text: base, source: "rules" };
-  await env.KV.put(key, text, { expirationTtl: 3600 });
+  await kvPutSafe(env, key, text, { expirationTtl: 3600 });
   return { text, source: "ai" };
 }

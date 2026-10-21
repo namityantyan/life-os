@@ -34,11 +34,11 @@ import {
 } from "./logic";
 
 /* ------------------------------------------------------------ helpers */
-const LEASE_KEY = "fx:lease";
-type LeaseRec = { holder: string; expires_at: string };
+type LeaseRec = { holder: string; expires_at: string; renewed_at?: string };
 
+/** Lease lives in D1 (one row). KV's free tier allows only 1,000 writes a day, far below a 5-second heartbeat. */
 async function readLease(env: Env): Promise<LeaseRec | null> {
-  const v = await env.KV.get<LeaseRec>(LEASE_KEY, "json");
+  const v = await one<LeaseRec>(env.DB, "SELECT holder, expires_at, renewed_at FROM fx_lease WHERE id=1");
   if (!v) return null;
   if (Date.parse(v.expires_at) <= Date.now()) return null;
   return v;
@@ -161,11 +161,22 @@ publicRoutes.post("/heartbeat", async (c) => {
   if (cur && cur.holder !== body.terminal_id) {
     return c.json({ error: "lease held by another terminal", lease: { holder: cur.holder, expires_at: cur.expires_at, held_by_you: false } }, 409);
   }
-  const expires = new Date(Date.now() + LEASE_SECONDS * 1000).toISOString();
-  await c.env.KV.put(LEASE_KEY, JSON.stringify({ holder: body.terminal_id, expires_at: expires } satisfies LeaseRec), { expirationTtl: 60 });
-  const received = nowIso();
-  await run(c.env.DB, "INSERT INTO fx_connector_state (user_id,payload_json,received_at) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload_json=excluded.payload_json, received_at=excluded.received_at",
-    uid, JSON.stringify({ ...body, lease_holder: body.terminal_id }), received);
+  // Write budget: renew the 30 s lease only when less than 18 s remain (≈ every 12 s), and store the
+  // connector state only when it changed or every 15 s (online threshold is 45 s).
+  const now = Date.now();
+  if (!cur || Date.parse(cur.expires_at) - now < 18_000) {
+    const expires = new Date(now + LEASE_SECONDS * 1000).toISOString();
+    await run(c.env.DB, "INSERT INTO fx_lease (id,holder,expires_at,renewed_at) VALUES (1,?,?,?) ON CONFLICT(id) DO UPDATE SET holder=excluded.holder, expires_at=excluded.expires_at, renewed_at=excluded.renewed_at",
+      body.terminal_id, expires, new Date(now).toISOString());
+  }
+  const payload = JSON.stringify({ ...body, lease_holder: body.terminal_id });
+  const prev = await one<{ payload_json: string; received_at: string }>(c.env.DB, "SELECT payload_json, received_at FROM fx_connector_state WHERE user_id=?", uid);
+  let received = prev?.received_at ?? nowIso();
+  if (!prev || prev.payload_json !== payload || now - Date.parse(prev.received_at) >= 15_000) {
+    received = nowIso();
+    await run(c.env.DB, "INSERT INTO fx_connector_state (user_id,payload_json,received_at) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload_json=excluded.payload_json, received_at=excluded.received_at",
+      uid, payload, received);
+  }
   const perms = await buildPermissions(c.env, uid, body.terminal_id);
   return c.json({ ok: true, received_at: received, permissions: perms });
 });
@@ -225,23 +236,47 @@ publicRoutes.post("/trades", async (c) => {
   return c.json({ ok: true, stored, duplicates });
 });
 
+/** How much history the server keeps per timeframe (charts + D1 SMA90 built from H1). Older bars are not stored. */
+const CANDLE_HORIZON_DAYS: Record<string, number> = { M5: 14, H1: 180, H4: 365, D1: 730 };
+
 publicRoutes.post("/candles", async (c) => {
   const body = candlesZ.parse(await c.req.json());
   const tf = TF_SECONDS[body.timeframe];
-  const stmts = body.bars.map((b) => c.env.DB.prepare(
+  const cutoff = Math.floor(Date.now() / 1000) - (CANDLE_HORIZON_DAYS[body.timeframe] ?? 30) * 86400;
+  const bars = body.bars.map((b) => ({ ...b, t: Math.floor(b.t / tf) * tf })).filter((b) => b.t >= cutoff);
+  if (!bars.length) return c.json({ ok: true, upserted: 0, skipped_old: body.bars.length });
+  // Write only new or changed bars: a connector restart re-sends history, and D1 bills every row written.
+  const lo = Math.min(...bars.map((b) => b.t)), hi = Math.max(...bars.map((b) => b.t));
+  const existing = await all<{ time: number; open: number; high: number; low: number; close: number }>(c.env.DB,
+    "SELECT time,open,high,low,close FROM fx_candles WHERE pair=? AND timeframe=? AND time BETWEEN ? AND ?", body.pair, body.timeframe, lo, hi);
+  const have = new Map(existing.map((r) => [r.time, r]));
+  const changed = bars.filter((b) => { const r = have.get(b.t); return !r || r.open !== b.o || r.high !== b.h || r.low !== b.l || r.close !== b.c; });
+  const stmts = changed.map((b) => c.env.DB.prepare(
     "INSERT INTO fx_candles (pair,timeframe,time,open,high,low,close) VALUES (?,?,?,?,?,?,?) ON CONFLICT(pair,timeframe,time) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close",
-  ).bind(body.pair, body.timeframe, Math.floor(b.t / tf) * tf, b.o, b.h, b.l, b.c));
+  ).bind(body.pair, body.timeframe, b.t, b.o, b.h, b.l, b.c));
   for (let i = 0; i < stmts.length; i += 100) await c.env.DB.batch(stmts.slice(i, i + 100));
-  return c.json({ ok: true, upserted: body.bars.length });
+  return c.json({ ok: true, upserted: changed.length, unchanged: bars.length - changed.length, skipped_old: body.bars.length - bars.length });
+});
+
+/** Latest stored bar per pair/timeframe so a restarted connector can send only what is missing. */
+publicRoutes.get("/candles/latest", async (c) => {
+  const rows = await all<{ pair: string; timeframe: string; latest: number }>(c.env.DB, "SELECT pair, timeframe, MAX(time) latest FROM fx_candles GROUP BY pair, timeframe");
+  return c.json({ items: rows, horizon_days: CANDLE_HORIZON_DAYS });
 });
 
 publicRoutes.post("/quotes", async (c) => {
   const raw = await c.req.json();
   const items = (Array.isArray(raw) ? raw : [raw]).map((x) => quoteZ.parse(x));
+  // Pairs view polls every 5 s; storing each pair at most every 4 s keeps D1 writes bounded.
+  const prev = new Map((await all<{ pair: string; quoted_at: string }>(c.env.DB, "SELECT pair, quoted_at FROM fx_quotes")).map((r) => [r.pair, r.quoted_at]));
+  let stored = 0;
   for (const q of items) {
+    const last = prev.get(q.pair);
+    if (last && Date.parse(q.at) - Date.parse(last) < 4000) continue;
     await run(c.env.DB, "INSERT INTO fx_quotes (pair,bid,ask,quoted_at) VALUES (?,?,?,?) ON CONFLICT(pair) DO UPDATE SET bid=excluded.bid, ask=excluded.ask, quoted_at=excluded.quoted_at", q.pair, q.bid, q.ask, q.at);
+    stored++;
   }
-  return c.json({ ok: true, stored: items.length });
+  return c.json({ ok: true, stored, throttled: items.length - stored });
 });
 
 publicRoutes.get("/permissions", async (c) => {
