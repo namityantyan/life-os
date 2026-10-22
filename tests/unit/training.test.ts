@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { estimate1RM, pickBest, progressionAdvice, summarizeSession, hasWeightUnit, normalizeSetInput } from "../../worker/modules/training/logic";
 import { parseTrainingText, findExercise, findPart } from "../../worker/modules/training/nlp";
-import { CATALOG, getExercise, searchCatalog, legacy_keys, canonicalKey, unitFor, PARTS } from "../../shared/training";
+import { CATALOG, getExercise, searchCatalog, legacy_keys, canonicalKey, unitFor, PARTS, sortByUsage, lastDoneLabel } from "../../shared/training";
 
 describe("catalog", () => {
   it("has 96 strength exercises plus bouldering with unique keys", () => {
@@ -196,5 +196,23 @@ describe("setInputMessage", () => {
     expect(setInputMessage("weight required", "ベンチプレス")).toContain("重量が必要");
     expect(setInputMessage("duration_sec required", "プランク")).toContain("秒数");
     expect(setInputMessage("reps required", "懸垂")).toContain("回数が必要");
+  });
+});
+
+describe("usage ordering", () => {
+  const u = (count: number, recent: number, last: string) => ({ count, recent, last });
+  it("puts recently frequent items first and keeps unused ones in order", () => {
+    const usage = { b: u(50, 0, "2025-01-01T00:00:00Z"), c: u(3, 3, "2026-10-20T00:00:00Z"), d: u(3, 3, "2026-10-21T00:00:00Z") };
+    expect(sortByUsage(["a", "b", "c", "d", "e"], (x) => x, usage)).toEqual(["d", "c", "b", "a", "e"]);
+    expect(sortByUsage(["a", "b"], (x) => x, undefined)).toEqual(["a", "b"]);
+  });
+  it("labels the last session by JST day", () => {
+    const now = new Date("2026-10-22T03:00:00Z"); // 12:00 JST
+    expect(lastDoneLabel("2026-10-21T16:00:00Z", now)).toBe("今日"); // 01:00 JST same day
+    expect(lastDoneLabel("2026-10-21T10:00:00Z", now)).toBe("昨日");
+    expect(lastDoneLabel("2026-10-19T03:00:00Z", now)).toBe("3日前");
+    expect(lastDoneLabel("2026-09-20T03:00:00Z", now)).toBe("4週間前");
+    expect(lastDoneLabel("2026-03-04T03:00:00Z", now)).toBe("3/4");
+    expect(lastDoneLabel("2025-03-04T03:00:00Z", now)).toBe("2025/3/4");
   });
 });

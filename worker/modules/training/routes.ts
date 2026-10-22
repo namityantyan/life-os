@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, nowIso } from "../../core/db";
 import { notify } from "../../core/notify";
-import { CATALOG, PARTS, getExercise, canonicalKey, legacyKeysFor, searchCatalog, unitFor, type CatalogEntry, type TrainingSession, type TrainingSet, type ExerciseRecord, type Part, type Equipment, EQUIPMENTS } from "../../../shared/training";
+import { CATALOG, PARTS, getExercise, canonicalKey, legacyKeysFor, searchCatalog, unitFor, type CatalogEntry, type TrainingSession, type TrainingSet, type ExerciseRecord, type Part, type Equipment, type TrainingUsage, type UsageStat, EQUIPMENTS } from "../../../shared/training";
 import { pickBest, progressionAdvice, summarizeSession, normalizeSetInput, setInputMessage, type Advice } from "./logic";
 import { parseTrainingText, type ParsedAction } from "./nlp";
 
@@ -84,6 +84,30 @@ routes.get("/catalog", (c) => {
   const equipment = c.req.query("equipment") as Equipment | undefined;
   const items = searchCatalog(q, { part: part && PARTS.includes(part) ? part : "", equipment: equipment && EQUIPMENTS.includes(equipment) ? equipment : "" });
   return c.json({ items, total: CATALOG.length, parts: PARTS });
+});
+
+/** How often / how recently each part and exercise was trained (sessions, not sets). */
+routes.get("/usage", async (c) => {
+  const user = c.get("user");
+  const since = new Date(Date.now() - 90 * 86400_000).toISOString();
+  const parts = await all<{ part: string; count: number; recent: number; last: string }>(c.env.DB,
+    `SELECT ss.part, COUNT(*) count, SUM(CASE WHEN ss.started_at>=? THEN 1 ELSE 0 END) recent, MAX(ss.started_at) last
+     FROM training_sessions ss WHERE ss.user_id=? AND EXISTS (SELECT 1 FROM training_sets s WHERE s.session_id=ss.id) GROUP BY ss.part`, since, user.id);
+  const rows = await all<{ exercise_key: string; session_id: string; started_at: string }>(c.env.DB,
+    `SELECT DISTINCT s.exercise_key, s.session_id, ss.started_at FROM training_sets s JOIN training_sessions ss ON ss.id=s.session_id WHERE s.user_id=?`, user.id);
+  const exercises: Record<string, UsageStat> = {};
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const k = canonicalKey(r.exercise_key);
+    if (seen.has(`${k}|${r.session_id}`)) continue; // legacy + canonical key in one session counts once
+    seen.add(`${k}|${r.session_id}`);
+    const u = (exercises[k] ??= { count: 0, recent: 0, last: r.started_at });
+    u.count++;
+    if (r.started_at >= since) u.recent++;
+    if (r.started_at > u.last) u.last = r.started_at;
+  }
+  const out: TrainingUsage = { parts: Object.fromEntries(parts.map((p) => [p.part, { count: p.count, recent: p.recent, last: p.last }])), exercises };
+  return c.json(out);
 });
 
 /* ---------- Sessions ---------- */

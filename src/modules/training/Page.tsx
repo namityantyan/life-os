@@ -4,8 +4,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { PageHeader, Card, Section, Button, Badge, Input, Select, Field, Segmented, EmptyState, ErrorBanner, PageSkeleton, Stagger, Item, IconButton, Modal, Table, Th, Td, trCls, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDate, fmtDateTime, fmtNum } from "@/lib/api";
 import {
-  CATALOG, PARTS, EQUIPMENTS, EQUIPMENT_LABELS, UNIT_LABELS, getExercise, legacyKeysFor, searchCatalog, unitFor,
-  type CatalogEntry, type Part, type Equipment, type TrainingSession, type TrainingSet, type ExerciseRecord, type WeightUnit,
+  CATALOG, PARTS, EQUIPMENTS, EQUIPMENT_LABELS, UNIT_LABELS, getExercise, legacyKeysFor, searchCatalog, sortByUsage, lastDoneLabel, unitFor,
+  type TrainingUsage, type UsageStat, type CatalogEntry, type Part, type Equipment, type TrainingSession, type TrainingSet, type ExerciseRecord, type WeightUnit,
 } from "@shared/training";
 
 type Tab = "log" | "history" | "catalog" | "records";
@@ -22,6 +22,12 @@ const describeSet = (s: TrainingSet) => {
   return `${fmtWeight(s.weight)} × ${s.reps ?? "—"}`;
 };
 const elapsedLabel = (iso: string) => { const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)); return m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60}分`; };
+
+/** Small "前回" badge: 今日 / 昨日 / 3日前 … */
+function LastDone({ u, className }: { u: UsageStat | undefined; className?: string }) {
+  if (!u) return null;
+  return <span className={cx("text-[0.6875rem] leading-none font-normal tabular opacity-70", className)} data-testid="last-done">{lastDoneLabel(u.last)}</span>;
+}
 
 export default function Page() {
   const nav = useNavigate();
@@ -47,6 +53,7 @@ export default function Page() {
 /* ====================== 記録 ====================== */
 function LogTab() {
   const { data, loading, error, reload, setData } = useApi<Active>("/training/active");
+  const { data: usage } = useApi<TrainingUsage>("/training/usage");
   const toast = useToast();
   const nav = useNavigate();
   const [starting, setStarting] = useState<Part | null>(null);
@@ -82,9 +89,9 @@ function LogTab() {
         <Card>
           <p className="text-sm text-label-2 mb-4">今日鍛える部位を選ぶと記録が始まります。</p>
           <Stagger className="flex flex-wrap gap-2">
-            {PARTS.map((p) => (
+            {sortByUsage([...PARTS], (p) => p, usage?.parts).map((p) => (
               <Item key={p} layout={false}>
-                <Button variant="tinted" size="lg" loading={starting === p} disabled={Boolean(starting)} onClick={() => start(p)} data-testid={`part-chip-${p}`}>{p}</Button>
+                <Button variant="tinted" size="lg" loading={starting === p} disabled={Boolean(starting)} onClick={() => start(p)} data-testid={`part-chip-${p}`}>{p}<LastDone u={usage?.parts[p]} className="ml-1" /></Button>
               </Item>
             ))}
           </Stagger>
@@ -94,7 +101,7 @@ function LogTab() {
   }
   return (
     <>
-      <ActiveSession session={session} sets={data.sets} onChange={(sets) => setData({ session, sets })} onFinish={() => setFinishOpen(true)} />
+      <ActiveSession session={session} sets={data.sets} usage={usage} onChange={(sets) => setData({ session, sets })} onFinish={() => setFinishOpen(true)} />
       <Modal open={finishOpen} onClose={() => setFinishOpen(false)} title="トレーニングを終了"
         footer={<><Button onClick={() => setFinishOpen(false)}>戻る</Button><Button variant="primary" loading={finishing} onClick={finish} data-testid="finish-confirm">終了する</Button></>}>
         <p className="text-sm text-label-2">{session.part}・{data.sets.length}セットを記録しました。終了すると履歴に保存され、通知にまとめが届きます。</p>
@@ -103,7 +110,7 @@ function LogTab() {
   );
 }
 
-function ActiveSession({ session, sets, onChange, onFinish }: { session: TrainingSession; sets: TrainingSet[]; onChange: (sets: TrainingSet[]) => void; onFinish: () => void }) {
+function ActiveSession({ session, sets, usage, onChange, onFinish }: { session: TrainingSession; sets: TrainingSet[]; usage: TrainingUsage | null; onChange: (sets: TrainingSet[]) => void; onFinish: () => void }) {
   const toast = useToast();
   const [selected, setSelected] = useState<CatalogEntry | null>(null);
   const [restSec, setRestSec] = useState<60 | 90 | 120>(() => { try { return (Number(localStorage.getItem("training:rest")) as 60 | 90 | 120) || 90; } catch { return 90; } });
@@ -139,7 +146,7 @@ function ActiveSession({ session, sets, onChange, onFinish }: { session: Trainin
         </Card>
 
         <Section title="種目">
-          <ExercisePicker selected={selected} onSelect={setSelected} recentKeys={recentKeys} part={session.part as Part} />
+          <ExercisePicker selected={selected} onSelect={setSelected} recentKeys={recentKeys} part={session.part as Part} usage={usage?.exercises} />
         </Section>
 
         <AnimatePresence mode="wait">
@@ -186,18 +193,30 @@ function ActiveSession({ session, sets, onChange, onFinish }: { session: Trainin
   );
 }
 
-function ExercisePicker({ selected, onSelect, recentKeys, part }: { selected: CatalogEntry | null; onSelect: (e: CatalogEntry) => void; recentKeys: string[]; part: Part }) {
+function ExercisePicker({ selected, onSelect, recentKeys, part, usage }: { selected: CatalogEntry | null; onSelect: (e: CatalogEntry) => void; recentKeys: string[]; part: Part; usage?: Record<string, UsageStat> }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const results = useMemo(() => (q.trim() ? searchCatalog(q).slice(0, 12) : searchCatalog("", { part }).slice(0, 12)), [q, part]);
+  // Without a query: this part's exercises, most used first. With a query: search rank first, usage breaks ties inside a rank.
+  const results = useMemo(() => (q.trim() ? searchCatalog(q).slice(0, 12) : sortByUsage(searchCatalog("", { part }), (e) => e.key, usage).slice(0, 12)), [q, part, usage]);
+  // Chips: this part's most used exercises (stable order while recording), plus anything done today outside that list.
+  const chipKeys = useMemo(() => {
+    const frequent = sortByUsage(searchCatalog("", { part }).filter((e) => usage?.[e.key]), (e) => e.key, usage).slice(0, 8).map((e) => e.key);
+    return [...frequent, ...recentKeys.filter((k) => !frequent.includes(k))];
+  }, [part, usage, recentKeys]);
+  const doneToday = (k: string) => recentKeys.includes(k);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); }; window.addEventListener("mousedown", h); return () => window.removeEventListener("mousedown", h); }, []);
   const pick = (e: CatalogEntry) => { onSelect(e); setQ(""); setOpen(false); };
   return (
     <Card className="space-y-3">
-      {recentKeys.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {recentKeys.map((k) => { const e = getExercise(k); if (!e) return null; return <button key={k} type="button" aria-pressed={selected?.key === k} onClick={() => pick(e)} className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium", selected?.key === k ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")}>{e.name}</button>; })}
+      {chipKeys.length > 0 && (
+        <div className="flex flex-wrap gap-2" data-testid="exercise-chips">
+          {chipKeys.map((k) => { const e = getExercise(k); if (!e) return null; return (
+            <button key={k} type="button" aria-pressed={selected?.key === k} onClick={() => pick(e)} data-testid={`exercise-chip-${k}`}
+              className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium inline-flex items-center gap-1.5", selected?.key === k ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")}>
+              {doneToday(k) && <span aria-label="今日記録済み">✓</span>}{e.name}{!doneToday(k) && <LastDone u={usage?.[k]} />}
+            </button>
+          ); })}
         </div>
       )}
       <div ref={ref} className="relative">
@@ -210,7 +229,7 @@ function ExercisePicker({ selected, onSelect, recentKeys, part }: { selected: Ca
                 <button key={e.key} type="button" onClick={() => pick(e)} className="focus-ring w-full text-left px-4 py-2.5 hover:bg-fill flex items-center gap-3" data-testid={`exercise-option-${e.key}`}>
                   <span className="font-medium">{e.name}</span>
                   <span className="text-xs text-label-2">{e.part} ・ {EQUIPMENT_LABELS[e.equipment]}</span>
-                  <span className="ml-auto text-xs text-label-3">{UNIT_LABELS[unitFor(e)]}</span>
+                  <span className="ml-auto flex items-center gap-2 text-xs text-label-3">{usage?.[e.key] && <Badge>{lastDoneLabel(usage[e.key].last)}</Badge>}{UNIT_LABELS[unitFor(e)]}</span>
                 </button>
               ))}
             </motion.div>

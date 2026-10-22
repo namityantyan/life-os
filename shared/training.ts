@@ -198,6 +198,31 @@ export function searchCatalog(q: string, opts: { part?: Part | ""; equipment?: E
   return ranked.sort((a, b) => a.rank - b.rank).map((r) => r.e);
 }
 
+/* ---------- Usage (よく使う順・前回) ---------- */
+export type UsageStat = { count: number; recent: number; last: string };
+export type TrainingUsage = { parts: Record<string, UsageStat>; exercises: Record<string, UsageStat> };
+
+/** Most-used first: sessions in the last 90 days, then all-time sessions, then most recent. Unused items keep their order after. */
+export function sortByUsage<T>(items: T[], keyOf: (t: T) => string, usage: Record<string, UsageStat> | undefined): T[] {
+  if (!usage) return items;
+  return items.map((t, i) => ({ t, i, u: usage[keyOf(t)] })).sort((a, b) => {
+    if (!a.u || !b.u) return a.u ? -1 : b.u ? 1 : a.i - b.i;
+    return b.u.recent - a.u.recent || b.u.count - a.u.count || b.u.last.localeCompare(a.u.last) || a.i - b.i;
+  }).map((x) => x.t);
+}
+
+const jstDay = (d: Date) => new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+/** "今日" / "昨日" / "3日前" / "5週間前" / "2025/3/4" — by JST calendar day. */
+export function lastDoneLabel(iso: string, now: Date = new Date()): string {
+  const days = Math.round((Date.parse(jstDay(now)) - Date.parse(jstDay(new Date(iso)))) / 86400_000);
+  if (days <= 0) return "今日";
+  if (days === 1) return "昨日";
+  if (days < 14) return `${days}日前`;
+  if (days < 60) return `${Math.floor(days / 7)}週間前`;
+  const [y, m, d] = jstDay(new Date(iso)).split("-").map(Number);
+  return y === Number(jstDay(now).slice(0, 4)) ? `${m}/${d}` : `${y}/${m}/${d}`;
+}
+
 /* ---------- API types ---------- */
 export type TrainingSession = { id: string; part: string; started_at: string; ended_at: string | null; notes: string | null; set_count?: number };
 export type TrainingSet = {

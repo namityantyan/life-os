@@ -56,6 +56,18 @@ test("training: start a session, log two bench press sets, finish, verify 1RM an
   await expect(page.getByTestId("detail-set")).toHaveCount(2);
   const sessionId = page.url().split("/").pop()!;
 
+  // Start screen: the part just trained is ranked by use and shows a "今日" badge; starting it shows ベンチプレス as a frequent chip.
+  await page.goto("/training");
+  await expect(page.locator('[data-testid^="part-chip-"]').last()).not.toHaveAttribute("data-testid", "part-chip-胸");
+  await expect(page.getByTestId("part-chip-胸").getByTestId("last-done")).toHaveText("今日");
+  await page.getByTestId("part-chip-胸").click();
+  await expect(page.getByTestId("exercise-chip-bench_press")).toContainText("今日");
+  await page.getByTestId("exercise-search").focus();
+  await expect(page.getByTestId("exercise-option-bench_press")).toContainText("今日");
+  await page.getByTestId("finish-session").click();
+  await page.getByTestId("finish-confirm").click();
+  await expect(page).toHaveURL(/\/training\/history\/[0-9a-f-]+/);
+
   // 重量・1RM tab: best is 62.5 (max weight across all sets, not the first set), est 1RM ≈ 72.9.
   await page.getByTestId("tab-records").click();
   const row = page.getByTestId("record-row-bench_press");
