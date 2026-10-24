@@ -30,10 +30,18 @@ pgrep -f "ssh -N .*$PREFIX/ssh/id_tunnel" >/dev/null && ok "接続中（$(config
 [[ -f "$PREFIX/logs/imggen-tunnel.log" ]] && tail -n 4 "$PREFIX/logs/imggen-tunnel.log" | sed 's/^/    /'
 
 step "モデル・ディスク・電源" ""
-m="$PREFIX/models/checkpoints/$MODEL_FILE"
-if [[ -f "$m" && -f "$m.verified" ]]; then ok "モデル: $(( $(stat -f %z "$m") / 1048576 ))MB（確認済み）"
-elif [[ -f "$m.part" ]]; then warn "モデル: ダウンロード途中 $(( $(stat -f %z "$m.part") / 1048576 ))MB / $(( MODEL_SIZE / 1048576 ))MB（セットアップを再実行すると続きから）"
-else fail "モデル: ありません（セットアップを再実行してください）"; fi
+st=(${(s: :)$(model_state "$MODEL_FILE")})
+case $st[1] in
+  ok) ok "アニメのモデル（Animagine XL 4.0）: $st[2]MB（確認済み）" ;;
+  part) warn "アニメのモデル: ダウンロード途中 $st[2]MB / $(( MODEL_SIZE / 1048576 ))MB（セットアップを再実行すると続きから）" ;;
+  *) fail "アニメのモデル: ありません（セットアップを再実行してください）" ;;
+esac
+st=(${(s: :)$(model_state "$PHOTO_MODEL_FILE")})
+case $st[1] in
+  ok) ok "実写のモデル（RealVisXL V5.0）: $st[2]MB（確認済み）" ;;
+  part) warn "実写のモデル: ダウンロード途中 $st[2]MB / $(( PHOTO_MODEL_SIZE / 1048576 ))MB（セットアップを再実行すると続きから）" ;;
+  *) warn "実写のモデル: ありません（空きを約10GB作ってからセットアップを再実行すると追加されます。アニメだけでも動きます）" ;;
+esac
 info "内蔵ディスクの空き: $(free_gb "$PREFIX")GB"
 pmset -g batt 2>/dev/null | grep -q "AC Power" && ok "電源アダプタ: 接続中" || warn "電源アダプタ: 未接続（バッテリー駆動中はスリープして生成が止まります）"
 { pmset -g assertions 2>/dev/null | grep -qi caffeinate || pgrep -xq caffeinate; } && ok "スリープ防止: 有効" || warn "スリープ防止: 無効"

@@ -1,5 +1,5 @@
 // Pure helpers for the images module (unit-tested): §0 guard, tag normalisation, AI prompt and its parsing.
-import { IMAGE_COUNT_MAX, type ImageRating } from "../../../shared/images";
+import { IMAGE_COUNT_MAX, PHOTO_R18_MESSAGE, type ImageModel, type ImageRating } from "../../../shared/images";
 
 /* ---------- §0 keyword guard ----------
  * Mirrors ai-image-business/scripts/safety.py (the service rejects these with 422 too) and adds a few
@@ -29,12 +29,18 @@ export const NAMED_TERMS = [
   "naruto", "ナルト", "goku", "悟空", "sailor moon", "セーラームーン", "evangelion", "エヴァ", "genshin", "原神",
   "hololive", "ホロライブ", "ghibli", "ジブリ", "disney", "ディズニー", "sanrio", "サンリオ", "hello kitty", "キティ",
 ];
+/** Photo model only: anything that points at a real, identifiable person (deepfake risk). Strict on purpose — the AI check covers names. */
+export const REAL_PERSON_TERMS = [
+  "celebrity", "celebrities", "famous person", "famous actor", "famous actress", "actor", "actress", "politician", "president", "prime minister", "royal family",
+  "influencer", "youtuber", "streamer", "idol", "lookalike", "look-alike", "looks like", "deepfake", "deep fake", "face swap", "faceswap", "real person",
+  "芸能人", "有名人", "俳優", "女優", "政治家", "首相", "総理", "大統領", "皇室", "王室", "アイドル", "配信者", "ユーチューバー", "インフルエンサー", "そっくり", "似せて", "に似た", "実在の", "知人", "友達の顔", "元カノ", "元カレ", "ディープフェイク",
+];
 /** "In the style of <artist>" style requests. */
 const ARTIST_PATTERNS = [/\bin the style of\b/i, /\bstyle of\b/i, /\bartist:/i, /\(artist\)/i, /\bby artist\b/i, /先生風/, /の画風/, /のタッチで/];
 /** Image-to-image requests (text2img only). */
 const I2I_PATTERNS = [/\bimg2img\b/i, /\bi2i\b/i, /この(画像|写真|絵)を/, /(画像|写真)を(元|もと)に/, /アップロードした/];
 
-export type GuardResult = { ok: true } | { ok: false; code: "minor" | "named" | "artist" | "i2i"; message: string };
+export type GuardResult = { ok: true } | { ok: false; code: "minor" | "named" | "artist" | "i2i" | "real_person" | "photo_r18"; message: string };
 
 const isAscii = (t: string) => /^[\x20-\x7e]+$/.test(t);
 /** ASCII terms match on word boundaries (so "mario" does not hit "marionette", "kid" not "kidney"); Japanese terms as substrings. */
@@ -47,12 +53,16 @@ export function hasTerm(text: string, term: string): boolean {
 }
 const firstHit = (text: string, terms: string[]) => terms.find((t) => hasTerm(text, t)) ?? null;
 
-/** Guards one text (the user's words, or the converted tags). `rating` is the rating that would be used. */
-export function guardText(text: string, rating: ImageRating = "all_ages"): GuardResult {
+/** Guards one text (the user's words, or the converted tags). `rating` is the rating that would be used.
+ *  The photo model is all-ages only: r18 or any sexual word is refused, and so is anything pointing at a real person. */
+export function guardText(text: string, rating: ImageRating = "all_ages", model: ImageModel = "anime"): GuardResult {
   const minor = firstHit(text, MINOR_TERMS);
   if (minor) return { ok: false, code: "minor", message: `「${minor}」を含むため生成できません（未成年を想起させる表現は不可）。` };
   const youth = firstHit(text, YOUTH_TERMS);
   if (youth && (rating === "r18" || firstHit(text, SEXUAL_TERMS))) return { ok: false, code: "minor", message: `「${youth}」と性的な表現の組み合わせは生成できません（未成年に見える人物の性的表現は不可）。` };
+  if (model === "photo" && (rating === "r18" || explicitlyAdult(text) || firstHit(text, SEXUAL_TERMS))) return { ok: false, code: "photo_r18", message: PHOTO_R18_MESSAGE };
+  const real = model === "photo" ? firstHit(text, REAL_PERSON_TERMS) : null;
+  if (real) return { ok: false, code: "real_person", message: `「${real}」を含むため生成できません（実写では実在の人物・実在の人物に似せた画像は作れません）。` };
   const named = firstHit(text, NAMED_TERMS);
   if (named) return { ok: false, code: "named", message: `「${named}」は既存の作品・キャラクター名のため生成できません。` };
   if (ARTIST_PATTERNS.some((p) => p.test(text))) return { ok: false, code: "artist", message: "特定の作家・絵柄の指定は生成できません。" };
@@ -73,13 +83,16 @@ const DROP_TAGS = new Set([
 ]);
 export const MAX_TAGS = 60;
 
+/** Photo-quality words the service appends itself (RealVisXL preset). */
+const DROP_PHOTO = new Set(["photorealistic", "photo realistic", "realistic", "hyperrealistic", "hyper realistic", "ultra realistic", "raw photo", "photo", "photograph", "high detail", "highly detailed", "sharp focus", "dslr", "uhd", "hdr", "film grain"]);
+
 /** Normalises a tag string: lower-case, comma separated, no duplicates, no quality/rating tags, ASCII only. */
-export function normalizeTags(raw: string | string[]): string {
+export function normalizeTags(raw: string | string[], model: ImageModel = "anime"): string {
   const parts = (Array.isArray(raw) ? raw : raw.split(/[,\n、，;]+/))
     .map((t) => t.normalize("NFKC").toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ").trim())
     .map((t) => t.replace(/^[\s"'`]+|[\s"'`.]+$/g, ""))
     .filter((t) => t && t.length <= 60 && /^[a-z0-9 ()':.!?/&+\-]+$/.test(t))
-    .filter((t) => !DROP_TAGS.has(t) && !t.startsWith("rating:") && !/^(score|year) ?\d/.test(t));
+    .filter((t) => !DROP_TAGS.has(t) && !(model === "photo" && DROP_PHOTO.has(t)) && !t.startsWith("rating:") && !/^(score|year) ?\d/.test(t));
   return Array.from(new Set(parts)).slice(0, MAX_TAGS).join(", ");
 }
 
@@ -112,6 +125,29 @@ export const IMAGE_SYSTEM_PROMPT = `あなたは画像生成プロンプトの�
 出力形式（このJSONだけ）:
 {"refuse": null | "minor" | "real_person" | "named_character" | "artist" | "image_input", "reason": "断るときの日本語の一言（それ以外は空）", "tags": "…", "rating": "all_ages" | "r18", "count": null | 1}`;
 
+/** Photo model (RealVisXL V5.0): plain English descriptive phrases, never r18, stricter on real people. */
+export const PHOTO_SYSTEM_PROMPT = `あなたは画像生成プロンプトの変換係です。ユーザーの日本語の依頼を、実写系の画像生成モデル（RealVisXL）向けの英語の描写フレーズに変換し、JSONだけを返します。
+
+ルール:
+- tags は英語の短い描写フレーズをカンマ区切りで。被写体・見た目・服装・動作・場所・光・構図の順に、自然な英語で書く（例:「花畑で白いワンピースの女性が微笑む」→ "a woman in her twenties wearing a white sundress, gentle smile, standing in a flower field, soft afternoon sunlight, shallow depth of field, medium shot"）。
+- danbooruタグ（1girl, solo など）は使わない。人物は "a woman", "a man", "two people" のように書く。人物は大人として書く。
+- 品質・画質の語（masterpiece, best quality, photorealistic, raw photo, 8k, high detail など）と rating は付けない（バックエンドが自動で付ける）。
+- rating は常に "all_ages"（実写は全年齢のみ）。
+- count はユーザーが枚数を言ったときだけ 1〜${IMAGE_COUNT_MAX} の整数、言っていなければ null。
+
+次の依頼は絶対に変換せず refuse に理由コードを入れる（婉曲・暗示でも同じ）:
+- "adult": 性的・裸・下着姿・きわどい・成人向け（R18・18禁など）の依頼。実写は全年齢のみ
+- "minor": 未成年・未成年に見える人物を性的・きわどく描く依頼
+- "real_person": 実在の人物すべて（芸能人、政治家、配信者、スポーツ選手、知人、家族、元恋人など）。名前の一部・あだ名・「〇〇に似た」「〇〇そっくり」「〇〇風の顔」も同じ。迷ったら refuse
+- "named_character": 既存のアニメ・ゲーム・漫画・映画などの特定キャラクターや作品（実写化・コスプレも同じ）
+- "artist": 特定の写真家・作家・スタジオの作風の指定
+- "image_input": ユーザーが手元の画像・写真を渡してそれを変換させる依頼（「この写真を」「添付の画像を元に」など）。「実写」「写真風」「リアル」などの画風の指定はこれに当たらない（実写モデルなのでそのまま描写する）
+問題がなければ refuse は null。
+
+出力形式（このJSONだけ）:
+{"refuse": null | "adult" | "minor" | "real_person" | "named_character" | "artist" | "image_input", "reason": "断るときの日本語の一言（それ以外は空）", "tags": "…", "rating": "all_ages", "count": null | 1}`;
+export const systemPromptFor = (model: ImageModel) => (model === "photo" ? PHOTO_SYSTEM_PROMPT : IMAGE_SYSTEM_PROMPT);
+
 export type AiConversion = { refuse: string | null; reason: string; tags: string; rating: ImageRating; count: number | null };
 const REFUSE_MESSAGES: Record<string, string> = {
   minor: "未成年・未成年に見える人物の性的表現は生成できません。",
@@ -119,15 +155,16 @@ const REFUSE_MESSAGES: Record<string, string> = {
   named_character: "既存のキャラクター・作品は生成できません。",
   artist: "特定の作家・絵柄の指定は生成できません。",
   image_input: "画像を元にした変換はできません（文章からの生成のみ）。",
+  adult: PHOTO_R18_MESSAGE,
 };
 
 /** Validates the model's JSON. Unknown refuse codes are treated as refusals (fail closed). */
-export function parseConversion(raw: unknown): AiConversion | null {
+export function parseConversion(raw: unknown, model: ImageModel = "anime"): AiConversion | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const refuse = o.refuse == null || o.refuse === "" || o.refuse === "null" || o.refuse === false ? null : String(o.refuse);
-  const tags = normalizeTags(typeof o.tags === "string" ? o.tags : Array.isArray(o.tags) ? o.tags.map(String) : "");
-  const rating: ImageRating = o.rating === "r18" ? "r18" : "all_ages";
+  const tags = normalizeTags(typeof o.tags === "string" ? o.tags : Array.isArray(o.tags) ? o.tags.map(String) : "", model);
+  const rating: ImageRating = o.rating === "r18" && model !== "photo" ? "r18" : "all_ages";
   const count = o.count == null ? null : clampCount(o.count, 1);
   return { refuse, reason: typeof o.reason === "string" ? o.reason.slice(0, 200) : "", tags, rating, count };
 }

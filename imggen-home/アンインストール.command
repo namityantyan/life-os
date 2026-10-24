@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Life OS 画像生成: 自宅Macからの削除（ダブルクリックで実行）
-#   常駐（launchd の3つ）を止めて登録を外します。~/LifeOS-imggen（モデル約7GBを含む）を消すかは選べます。
+#   常駐（launchd の3つ）を止めて登録を外します。~/LifeOS-imggen（モデル 各約7GBを含む）を消すかは選べます。
 set -u -o pipefail
 source "${0:A:h}/lib/common.zsh" 2>/dev/null || source "${LIFEOS_IMGGEN_PREFIX:-$HOME/LifeOS-imggen}/lib/common.zsh" || { print -r -- "lib/common.zsh が見つかりません。"; exit 1; }
 
@@ -14,7 +14,7 @@ pkill -f "ssh -N .*$PREFIX/ssh/id_tunnel" 2>/dev/null || true
 case "$PREFIX" in ""|/|"$HOME"|"$HOME/") fail "インストール先が不正なため、フォルダは消しません: $PREFIX"; pause_exit 1 ;; esac
 if [[ -d "$PREFIX" ]]; then
   print -r -- ""
-  print -r -- "  $PREFIX には Python・ComfyUI・モデル（約7GB）・生成した画像（workspace）・接続用の鍵があります。"
+  print -r -- "  $PREFIX には Python・ComfyUI・モデル（アニメ・実写 各約7GB）・生成した画像（workspace）・接続用の鍵があります。"
   print -rn -- "  このフォルダも削除しますか？（元に戻せません） [y/N]: "; read -r b || b=""
   if [[ "$b" == [yY]* ]]; then
     cd / && rm -rf "$PREFIX" && ok "削除しました: $PREFIX" || fail "削除できませんでした: $PREFIX"

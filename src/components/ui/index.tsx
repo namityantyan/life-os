@@ -144,7 +144,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
     </button>
   );
 }
-export function Segmented<T extends string>({ value, onChange, options, className, testId }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode }[]; className?: string; testId?: string }) {
+export function Segmented<T extends string>({ value, onChange, options, className, testId }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; disabled?: boolean; title?: string }[]; className?: string; testId?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   // Narrow screens scroll the control horizontally; keep the selected tab visible without moving the page.
   useEffect(() => {
@@ -155,7 +155,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
   return (
     <div ref={ref} className={cx("inline-flex max-w-[calc(100vw-2rem)] overflow-x-auto p-0.5 rounded-[var(--radius-md)] bg-fill relative whitespace-nowrap", className)} role="tablist" data-testid={testId}>
       {options.map((o) => (
-        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("tap focus-ring relative z-10 px-3 h-9 md:h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
+        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} disabled={o.disabled} aria-disabled={o.disabled || undefined} title={o.title} onClick={() => !o.disabled && onChange(o.value)} className={cx("tap focus-ring relative z-10 px-3 h-9 md:h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", o.disabled ? "text-label-3 cursor-not-allowed" : value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
           {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={quick} />}
           {o.label}
         </button>

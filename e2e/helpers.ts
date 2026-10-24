@@ -4,7 +4,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 export async function login(page: Page) {
   await page.goto("/");
   const ctx = page.context();
-  await ctx.request.post("/api/auth/dev-login", { headers: { Origin: "http://localhost:5173" } });
+  await ctx.request.post("/api/auth/dev-login", { headers: { Origin: new URL(page.url()).origin } }); // the server under test (E2E_BASE_URL or :5173)
   await page.goto("/");
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 15000 }).catch(async () => {
     // mobile: sidebar hidden; menu button present instead

@@ -58,6 +58,26 @@ Google ログイン ─▶ workers.dev の callback（Google に登録済み）�
 - ページを閉じても、10 分ごとの cron が生成待ちのジョブを確認して画像を受け取ります（Mac 側はジョブを 1 時間で忘れるため）。
 - 安全ガード（§0）は Life OS 側（キーワード＋AI 判定）と Mac 側（422）の二重です。
 
+### モデル（アニメ / 実写）
+
+画像生成ページで「アニメ」「実写」を選べます（ブラウザに記憶。履歴にもどちらで作ったかを表示、`image_generations.model`）。
+
+| | アニメ（既定） | 実写 |
+| --- | --- | --- |
+| モデル | Animagine XL 4.0（`cagliostrolab/animagine-xl-4.0`） | RealVisXL V5.0 fp16（`SG161222/RealVisXL_V5.0` @ `ac93e0dd`, 6,938,065,488 B, sha256 `6a35a785…3b80`） |
+| ライセンス | openrail++（商用可） | openrail++（商用可・利用制限条項あり） |
+| AI 変換 | 英語 danbooru タグ | 英語の描写フレーズ（タグ・品質語なし） |
+| 設定 | euler_ancestral / normal, 28 steps, CFG 5 | dpmpp_sde / karras, 30 steps, CFG 5 |
+| 区分 | 全年齢・R18 | **全年齢のみ**（R18 は Life OS とサービスの両方で 422） |
+
+- 実写はディープフェイクの危険が大きいので、実在の人物（芸能人・政治家・知人・「〜に似た」など）の指定はキーワードでも弾き、NSFW 回避と未成年回避のネガティブを常に付けます。
+- サービス API: `POST /v1/generate` の `"model": "anime" | "photo"`（省略時は anime）、`GET /v1/health` の `"models": {"anime": bool, "photo": bool}`。`models` の無い古いサービスは実写を使えない扱い（`model` を無視してアニメで描いてしまうため、Life OS が送る前に確認します）。
+- 実写モデルは任意です。自宅Macの空きが足りないとセットアップは実写を省略し（アニメだけで動く）、空きを作って再実行すると追加します。
+
+### 自宅Macの更新
+
+新しい zip をダウンロードして `LifeOS-画像生成-セットアップ.command` をもう一度実行するのが更新です。スクリプトを入れ替え、確認済みのモデル（`.verified`）はダウンロードし直さず、常駐（launchd）を登録し直します。
+
 ## 更新
 
 ```bash

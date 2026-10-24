@@ -12,8 +12,8 @@ const gen = (over: Record<string, unknown> = {}) => ({
 });
 const done = gen({ status: "done", progress_done: 1, queue_position: null, files: [{ id: "f1", idx: 0, filename: "a.png", seed: 4242, bytes: PNG.length, created_at: now }] });
 
-async function mockOnline(page: Page, opts: { items?: unknown[]; generate?: { status: number; body: unknown } } = {}) {
-  await page.route("**/api/images/status", (r) => r.fulfill({ json: { status: { state: "online", message: null, comfyui: "up", model_available: true, queue_length: 0 } } }));
+async function mockOnline(page: Page, opts: { items?: unknown[]; generate?: { status: number; body: unknown }; models?: Record<string, boolean> } = {}) {
+  await page.route("**/api/images/status", (r) => r.fulfill({ json: { status: { state: "online", message: null, comfyui: "up", model_available: true, queue_length: 0, ...(opts.models ? { models: opts.models } : {}) } } }));
   let items = opts.items ?? [];
   await page.route("**/api/images", (r) => r.fulfill({ json: { items } }));
   await page.route("**/api/images/generate", (r) => {
@@ -80,4 +80,27 @@ test("images: a job in progress survives a reload", async ({ authed: page }) => 
   await expect(page.getByTestId("images-jobs-offline")).toBeVisible();
   await page.reload();
   await expect(page.getByTestId("images-pending")).toHaveCount(1);
+});
+
+test("images: model selector — 実写 disabled until the Mac has it, all-ages only, remembered", async ({ authed: page }) => {
+  await mockOnline(page, { models: { anime: true, photo: false } });
+  await page.goto("/images");
+  const photoTab = page.getByTestId("images-model").getByRole("tab", { name: "実写" });
+  await expect(photoTab).toBeDisabled();
+  await expect(page.getByTestId("images-photo-missing")).toContainText("セットアップ.command」をもう一度実行");
+
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await mockOnline(page, { models: { anime: true, photo: true }, generate: { status: 201, body: { item: gen({ model: "photo", tags: "a woman in a flower field" }) } } });
+  await page.reload();
+  await page.getByTestId("images-rating").getByRole("tab", { name: "R18" }).click();
+  await page.getByTestId("images-model").getByRole("tab", { name: "実写" }).click();
+  await expect(page.getByTestId("images-rating").getByRole("tab", { name: "R18" })).toBeDisabled();
+  await expect(page.getByTestId("images-rating").getByRole("tab", { name: "全年齢" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("images-model-hint")).toContainText("全年齢のみ");
+  await page.getByTestId("images-prompt").fill("花畑の女性");
+  const req = page.waitForRequest((r) => r.url().endsWith("/api/images/generate") && r.method() === "POST");
+  await page.getByTestId("images-generate").click();
+  expect((await req).postDataJSON()).toMatchObject({ text: "花畑の女性", model: "photo", rating: "all_ages" });
+  await page.reload();
+  await expect(page.getByTestId("images-model").getByRole("tab", { name: "実写" })).toHaveAttribute("aria-selected", "true");
 });

@@ -3,13 +3,16 @@ import { AnimatePresence, motion } from "motion/react";
 import { api, ApiError, useApi, fmtDateTime } from "@/lib/api";
 import { Icon } from "@/components/icons";
 import { Badge, Button, Card, EmptyState, ErrorBanner, Field, Input, Item, Modal, PageHeader, PageSkeleton, Segmented, Skeleton, Stagger, cx, useToast } from "@/components/ui";
-import { IMAGE_COUNT_MAX, IMAGE_RATING_LABELS, IMAGE_STATUS_LABELS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "@shared/images";
+import { IMAGE_COUNT_MAX, IMAGE_MODEL_LABELS, IMAGE_RATING_LABELS, IMAGE_STATUS_LABELS, asImageModel, type ImageFile, type ImageGeneration, type ImageModel, type ImageRating, type ImageServiceStatus } from "@shared/images";
 
 type History = { items: ImageGeneration[] };
 type Selected = { gen: ImageGeneration; file: ImageFile };
 const POLL_MS = 3000;
 const isPending = (g: ImageGeneration) => g.status === "queued" || g.status === "running";
 const fileUrl = (f: ImageFile) => `/api/images/files/${f.id}`;
+const MODEL_KEY = "lifeos.images.model";
+const loadModel = (): ImageModel => { try { return asImageModel(localStorage.getItem(MODEL_KEY)); } catch { return "anime"; } };
+const PHOTO_MISSING_HINT = "実写モデルは自宅Macにまだ入っていません。自宅Macで「LifeOS-画像生成-セットアップ.command」をもう一度実行すると追加されます。";
 
 export default function Page() {
   const toast = useToast();
@@ -18,6 +21,7 @@ export default function Page() {
   const [text, setText] = useState("");
   const [count, setCount] = useState("1");
   const [rating, setRating] = useState<ImageRating>("all_ages");
+  const [model, setModel] = useState<ImageModel>(loadModel);
   const [seed, setSeed] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -29,6 +33,10 @@ export default function Page() {
   const items = history.data?.items ?? [];
   const svc = status.data?.status;
   const online = svc?.state === "online";
+  const photoReady = svc?.models?.photo === true;
+  const photoBlocked = model === "photo" && online && !photoReady;
+  useEffect(() => { try { localStorage.setItem(MODEL_KEY, model); } catch { /* private mode */ } }, [model]);
+  useEffect(() => { if (model === "photo") setRating("all_ages"); }, [model]);
 
   // Poll in-progress jobs (they live in the DB, so a reload picks them up again).
   const pendingIds = items.filter(isPending).map((g) => g.id).join(",");
@@ -50,10 +58,10 @@ export default function Page() {
   }, [pendingIds]);
 
   const generate = async () => {
-    const t = text.trim(); if (!t || busy || !online) return;
+    const t = text.trim(); if (!t || busy || !online || photoBlocked) return;
     setBusy(true); setRefusal(null);
     try {
-      const body: Record<string, unknown> = { text: t, count: Number(count), rating };
+      const body: Record<string, unknown> = { text: t, count: Number(count), rating: model === "photo" ? "all_ages" : rating, model };
       if (seed.trim()) body.seed = Number(seed);
       const r = await api.post<{ item: ImageGeneration }>("/images/generate", body);
       history.setData((d) => ({ items: [r.item, ...(d?.items ?? [])] }));
@@ -116,14 +124,17 @@ export default function Page() {
           </AnimatePresence>
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">枚数</div><Segmented value={count} onChange={setCount} testId="images-count" options={Array.from({ length: IMAGE_COUNT_MAX }, (_, i) => ({ value: String(i + 1), label: `${i + 1}枚` }))} /></div>
-            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">区分</div><Segmented value={rating} onChange={setRating} testId="images-rating" options={(["all_ages", "r18"] as const).map((r) => ({ value: r, label: IMAGE_RATING_LABELS[r] }))} /></div>
+            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">モデル</div><Segmented value={model} onChange={setModel} testId="images-model" options={(["anime", "photo"] as const).map((m) => ({ value: m, label: IMAGE_MODEL_LABELS[m], disabled: m === "photo" && online && !photoReady && model !== "photo", title: m === "photo" && online && !photoReady ? PHOTO_MISSING_HINT : undefined }))} /></div>
+            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">区分</div><Segmented value={model === "photo" ? "all_ages" : rating} onChange={setRating} testId="images-rating" options={(["all_ages", "r18"] as const).map((r) => ({ value: r, label: IMAGE_RATING_LABELS[r], disabled: r === "r18" && model === "photo", title: r === "r18" && model === "photo" ? "実写は全年齢のみです" : undefined }))} /></div>
             <Field label="シード" className="w-36"><Input value={seed} onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder="ランダム" aria-label="シード" data-testid="images-seed" className="h-9" /></Field>
             <div className="flex-1" />
             <div className="flex flex-col items-end gap-1">
-              <Button type="submit" variant="primary" loading={busy} disabled={!text.trim() || !online || !seedValid} data-testid="images-generate">生成</Button>
+              <Button type="submit" variant="primary" loading={busy} disabled={!text.trim() || !online || !seedValid || photoBlocked} data-testid="images-generate">生成</Button>
               <span className="text-[0.6875rem] text-label-3 hidden sm:block">Enterで改行・{isMac ? "⌘" : "Ctrl"}＋Enterで生成</span>
             </div>
           </div>
+          {model === "photo" && <p className="text-xs text-label-2" data-testid="images-model-hint">{photoBlocked ? PHOTO_MISSING_HINT : "実写は全年齢のみです。実在の人物・実在の人物に似せた画像は作れません。"}</p>}
+          {model === "anime" && online && !photoReady && <p className="text-xs text-label-3" data-testid="images-photo-missing">{PHOTO_MISSING_HINT}</p>}
         </form>
       </Card>
 
@@ -155,8 +166,9 @@ export default function Page() {
             )))}
             {tiles.map((t) => (
               <Item key={t.file.id}>
-                <button className="block w-full aspect-[3/4] rounded-[var(--radius-lg)] overflow-hidden bg-fill focus-ring pressable" onClick={() => setSelected(t)} aria-label={`画像を開く：${t.gen.prompt_text}`} data-testid="images-tile">
+                <button className="relative block w-full aspect-[3/4] rounded-[var(--radius-lg)] overflow-hidden bg-fill focus-ring pressable" onClick={() => setSelected(t)} aria-label={`画像を開く：${t.gen.prompt_text}`} data-testid="images-tile">
                   <img src={fileUrl(t.file)} alt="" loading="lazy" decoding="async" className="size-full object-cover" />
+                  <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-[0.6875rem] font-medium text-white" data-testid="images-tile-model">{IMAGE_MODEL_LABELS[asImageModel(t.gen.model)]}</span>
                 </button>
               </Item>
             ))}
@@ -166,7 +178,7 @@ export default function Page() {
 
       {online && <HomeMacSetup className="mt-8" />}
 
-      <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile} onReuse={(g) => { setText(g.prompt_text); setRating(g.rating); setSelected(null); taRef.current?.focus(); }} />
+      <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile} onReuse={(g) => { setText(g.prompt_text); setModel(asImageModel(g.model)); setRating(asImageModel(g.model) === "photo" ? "all_ages" : g.rating); setSelected(null); taRef.current?.focus(); }} />
     </div>
   );
 }
@@ -191,6 +203,7 @@ function ImageModal({ selected, onClose, onDelete, onReuse }: { selected: Select
             <div><dt className="text-xs text-label-2 font-medium flex items-center justify-between">タグ<button className="text-accent text-xs" onClick={() => copy(s.gen.tags)}>コピー</button></dt><dd className="mt-1 font-mono text-xs leading-relaxed break-words text-label-2 select-all" data-testid="images-tags">{s.gen.tags}</dd></div>
             <div className="flex gap-6">
               <div><dt className="text-xs text-label-2 font-medium">シード</dt><dd className="mt-1 tabular" data-testid="images-seed-value">{s.file.seed ?? "—"}</dd></div>
+              <div><dt className="text-xs text-label-2 font-medium">モデル</dt><dd className="mt-1" data-testid="images-model-value">{IMAGE_MODEL_LABELS[asImageModel(s.gen.model)]}</dd></div>
               <div><dt className="text-xs text-label-2 font-medium">区分</dt><dd className="mt-1"><Badge tone={s.gen.rating === "r18" ? "orange" : "neutral"}>{IMAGE_RATING_LABELS[s.gen.rating]}</Badge></dd></div>
             </div>
             <div><dt className="text-xs text-label-2 font-medium">作成</dt><dd className="mt-1 tabular">{fmtDateTime(s.gen.created_at)}</dd></div>
@@ -226,9 +239,10 @@ function HomeMacSetup({ className }: { className?: string }) {
       {open && (
         <div className="mt-3 space-y-3">
           <ol className="list-decimal pl-5 text-sm text-label-2 space-y-1">
-            <li>生成に使うMac（Apple Silicon・macOS 14以降・空き20GB以上）でこのページを開き、下のボタンからダウンロードします。</li>
+            <li>生成に使うMac（Apple Silicon・macOS 14以降・空き20GB以上、実写モデルも入れるならさらに約10GB）でこのページを開き、下のボタンからダウンロードします。</li>
             <li>展開したフォルダの「LifeOS-画像生成-セットアップ.command」をダブルクリックします。開けないときは右クリックして「開く」（それでも開けないときは システム設定 → プライバシーとセキュリティ →「このまま開く」）。</li>
-            <li>モデル（約7GB）のダウンロードが終わるまで待ちます。終わったら電源につなぎ、ふたを開けたままにしておきます。</li>
+            <li>モデル（アニメ・実写 各約7GB）のダウンロードが終わるまで待ちます。終わったら電源につなぎ、ふたを開けたままにしておきます。</li>
+            <li>更新するとき（実写モデルを追加するときも）は、新しくダウンロードした zip のセットアップをもう一度実行します。入っているモデルはそのまま使います。</li>
           </ol>
           <div className="flex flex-wrap items-center gap-3">
             <Button size="sm" variant="tinted" onClick={download} loading={busy} data-testid="images-home-mac-download">セットアップをダウンロード</Button>

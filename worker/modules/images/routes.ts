@@ -4,8 +4,8 @@ import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId } from "../../core/db";
 import { chatJson } from "../../core/ai";
 import { notify } from "../../core/notify";
-import { IMAGE_COUNT_MAX, IMAGE_RATINGS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
-import { IMAGE_SYSTEM_PROMPT, SAFE_NAME, clampCount, decideRating, guardText, aiRefusal, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError } from "./logic";
+import { IMAGE_COUNT_MAX, IMAGE_MODELS, IMAGE_RATINGS, PHOTO_R18_MESSAGE, asImageModel, type ImageFile, type ImageGeneration, type ImageModel, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
+import { SAFE_NAME, clampCount, decideRating, explicitlyAdult, guardText, aiRefusal, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError, systemPromptFor } from "./logic";
 import { buildHomeInstaller } from "./installer";
 
 /**
@@ -17,7 +17,7 @@ export const routes = new Hono<AppEnv>();
 const MAX_PENDING = 3;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
-type GenRow = { id: string; user_id: string; prompt_text: string; tags: string; rating: string; count: number; seed: number | null; job_id: string | null; status: string; progress_done: number; queue_position: number | null; work_id: string | null; error: string | null; created_at: string; updated_at: string };
+type GenRow = { id: string; user_id: string; prompt_text: string; tags: string; model: string; rating: string; count: number; seed: number | null; job_id: string | null; status: string; progress_done: number; queue_position: number | null; work_id: string | null; error: string | null; created_at: string; updated_at: string };
 type FileRow = { id: string; generation_id: string; idx: number; filename: string; seed: number | null; bytes: number; mime: string; store_key: string; created_at: string };
 
 /* ---------- service client ---------- */
@@ -36,14 +36,23 @@ const readJson = async (r: Response): Promise<unknown> => { try { return await r
 
 const OFFLINE_MESSAGE = "Macに接続できません。Macが起動していないか、スリープ中です。";
 
+/** /v1/health `models` ({anime, photo}). A service from before the photo model has no such field: anime only (it would ignore `model`). */
+export const parseModels = (b: unknown): Record<ImageModel, boolean> | null => {
+  if (!b || typeof b !== "object") return null;
+  const m = (b as { models?: unknown }).models, avail = (b as { model_available?: unknown }).model_available;
+  if (m && typeof m === "object") { const o = m as Record<string, unknown>; return { anime: o.anime === true, photo: o.photo === true }; }
+  return typeof avail === "boolean" ? { anime: avail, photo: false } : null;
+};
+export const PHOTO_MISSING_MESSAGE = "自宅Macに実写モデルが入っていません。自宅Macでセットアップをもう一度実行すると追加されます。";
+
 export async function serviceStatus(env: Env): Promise<ImageServiceStatus> {
-  const base: ImageServiceStatus = { state: "offline", message: OFFLINE_MESSAGE, comfyui: null, model_available: null, queue_length: null };
+  const base: ImageServiceStatus = { state: "offline", message: OFFLINE_MESSAGE, comfyui: null, model_available: null, queue_length: null, models: null };
   if (!configured(env)) return { ...base, state: "unconfigured", message: "画像生成サービスの接続先が設定されていません。" };
   let r: Response;
   try { r = await svc(env, "/v1/health", {}, 5000); } catch { return base; }
   if (r.status === 401 || r.status === 403) return { ...base, message: "画像生成サービスの認証に失敗しました。" };
   const b = (await readJson(r)) as { ok?: boolean; comfyui?: string; model_available?: boolean; queue_length?: number } | null;
-  const detail = { comfyui: b?.comfyui === "up" ? "up" as const : b?.comfyui === "down" ? "down" as const : null, model_available: typeof b?.model_available === "boolean" ? b.model_available : null, queue_length: typeof b?.queue_length === "number" ? b.queue_length : null };
+  const detail = { comfyui: b?.comfyui === "up" ? "up" as const : b?.comfyui === "down" ? "down" as const : null, model_available: typeof b?.model_available === "boolean" ? b.model_available : null, queue_length: typeof b?.queue_length === "number" ? b.queue_length : null, models: parseModels(b) };
   if (r.ok && b?.ok) return { state: "online", message: null, ...detail };
   return { state: "offline", message: b?.model_available === false ? "Macのモデルが準備できていません（SSDが未接続か、モデルをダウンロード中の可能性）。" : "画像生成サービスが応答しません。", ...detail };
 }
@@ -74,12 +83,12 @@ export const store = {
 
 /* ---------- rows ---------- */
 
-const GEN_COLS = "id,user_id,prompt_text,tags,rating,count,seed,job_id,status,progress_done,queue_position,work_id,error,created_at,updated_at";
+const GEN_COLS = "id,user_id,prompt_text,tags,model,rating,count,seed,job_id,status,progress_done,queue_position,work_id,error,created_at,updated_at";
 /** SQLite datetime('now') is UTC without a zone ("2026-10-24 01:02:03"); the browser needs ISO to show JST. */
 const iso = (t: string) => (/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(t) ? `${t.replace(" ", "T")}Z` : t);
 const toFile = (f: FileRow): ImageFile => ({ id: f.id, idx: f.idx, filename: f.filename, seed: f.seed, bytes: f.bytes, created_at: iso(f.created_at) });
 const toItem = (g: GenRow, files: FileRow[]): ImageGeneration => ({
-  id: g.id, prompt_text: g.prompt_text, tags: g.tags, rating: (g.rating === "r18" ? "r18" : "all_ages"), count: g.count, seed: g.seed,
+  id: g.id, prompt_text: g.prompt_text, tags: g.tags, model: asImageModel(g.model), rating: (g.rating === "r18" ? "r18" : "all_ages"), count: g.count, seed: g.seed,
   status: g.status as ImageGeneration["status"], progress_done: g.progress_done, queue_position: g.queue_position, error: g.error,
   created_at: iso(g.created_at), updated_at: iso(g.updated_at), files: files.filter((f) => f.generation_id === g.id).sort((a, b) => a.idx - b.idx).map(toFile),
 });
@@ -175,28 +184,32 @@ const genSchema = z.object({
   text: z.string().trim().min(1).max(2000),
   count: z.number().int().min(1).max(IMAGE_COUNT_MAX).optional(),
   rating: z.enum(IMAGE_RATINGS).optional(),
+  model: z.enum(IMAGE_MODELS).optional(),
   seed: z.number().int().min(0).max(2 ** 32 - 1).nullable().optional(),
 });
 
-/** Converts the user's words to tags (AI) and applies the §0 guard on both sides of the conversion. */
-export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>): Promise<{ ok: true; tags: string; rating: ImageRating; count: number } | { ok: false; status: 422 | 503; code: string; message: string }> {
-  const pre = guardText(body.text, body.rating === "r18" ? "r18" : "all_ages");
+/** Converts the user's words to tags (AI) and applies the §0 guard on both sides of the conversion.
+ *  The photo model is all-ages only (r18 refused up front) and uses its own conversion prompt (descriptive phrases, not danbooru tags). */
+export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>): Promise<{ ok: true; tags: string; model: ImageModel; rating: ImageRating; count: number } | { ok: false; status: 422 | 503; code: string; message: string }> {
+  const model = body.model ?? "anime";
+  if (model === "photo" && (body.rating === "r18" || explicitlyAdult(body.text))) return { ok: false, status: 422, code: "refused", message: PHOTO_R18_MESSAGE };
+  const pre = guardText(body.text, body.rating === "r18" ? "r18" : "all_ages", model);
   if (!pre.ok) return { ok: false, status: 422, code: "refused", message: pre.message };
   const fallback = { refuse: "__fallback", reason: "", tags: "", rating: "all_ages", count: null };
-  const ai = await chatJson<unknown>(env, [{ role: "system", content: IMAGE_SYSTEM_PROMPT }, { role: "user", content: body.text }], fallback);
-  let conv = ai.parsed ? parseConversion(ai.data) : null;
+  const ai = await chatJson<unknown>(env, [{ role: "system", content: systemPromptFor(model) }, { role: "user", content: body.text }], fallback);
+  let conv = ai.parsed ? parseConversion(ai.data, model) : null;
   if (!conv) {
     // AI down or unparseable: only English tags typed by the user can go through (keyword guard + service guard).
     if (!looksLikeTags(body.text)) return { ok: false, status: 503, code: "ai_unavailable", message: "AIに接続できないため日本語を変換できません。英語のタグで入力すると生成できます。" };
-    conv = { refuse: null, reason: "", tags: normalizeTags(body.text), rating: "all_ages", count: null };
+    conv = { refuse: null, reason: "", tags: normalizeTags(body.text, model), rating: "all_ages", count: null };
   }
   conv.refuse = aiRefusal(conv.refuse, body.text);
   if (conv.refuse) return { ok: false, status: 422, code: "refused", message: refuseMessage(conv.refuse, conv.reason) };
   if (!conv.tags) return { ok: false, status: 422, code: "empty", message: "画像の内容を読み取れませんでした。もう少し具体的に書いてください。" };
-  const rating = decideRating(body.rating, conv.rating, body.text);
-  const post = guardText(conv.tags, rating);
+  const rating = model === "photo" ? "all_ages" : decideRating(body.rating, conv.rating, body.text);
+  const post = guardText(conv.tags, rating, model);
   if (!post.ok) return { ok: false, status: 422, code: "refused", message: post.message };
-  return { ok: true, tags: conv.tags, rating, count: body.count ?? conv.count ?? 1 };
+  return { ok: true, tags: conv.tags, model, rating, count: body.count ?? conv.count ?? 1 };
 }
 
 routes.post("/generate", async (c) => {
@@ -209,7 +222,14 @@ routes.post("/generate", async (c) => {
   const prep = await prepareRequest(c.env, body);
   if (!prep.ok) return c.json({ error: prep.message, code: prep.code }, prep.status);
   const count = clampCount(prep.count);
-  const payload: Record<string, unknown> = { prompt: prep.tags, count, rating: prep.rating, title: "", requester: `lifeos:${user.id}` };
+  if (prep.model === "photo") {
+    // An older service ignores `model` and would draw anime instead, so ask first whether the photo model is installed.
+    let h: Response;
+    try { h = await svc(c.env, "/v1/health", {}, 5000); } catch { return c.json({ error: OFFLINE_MESSAGE, code: "offline" }, 503); }
+    if (h.status === 401 || h.status === 403) return c.json({ error: "画像生成サービスの認証に失敗しました。", code: "offline" }, 503);
+    if (!parseModels(await readJson(h))?.photo) return c.json({ error: PHOTO_MISSING_MESSAGE, code: "model_unavailable" }, 503);
+  }
+  const payload: Record<string, unknown> = { prompt: prep.tags, count, rating: prep.rating, model: prep.model, title: "", requester: `lifeos:${user.id}` };
   if (body.seed != null) payload.seed = body.seed;
 
   let r: Response;
@@ -224,8 +244,8 @@ routes.post("/generate", async (c) => {
 
   const id = newId();
   const qp = (resBody as { queue_position?: unknown }).queue_position;
-  await run(c.env.DB, "INSERT INTO image_generations (id,user_id,prompt_text,tags,rating,count,seed,job_id,status,queue_position) VALUES (?,?,?,?,?,?,?,?,?,?)",
-    id, user.id, body.text, prep.tags, prep.rating, count, body.seed ?? null, jobId, "queued", typeof qp === "number" ? qp : null);
+  await run(c.env.DB, "INSERT INTO image_generations (id,user_id,prompt_text,tags,model,rating,count,seed,job_id,status,queue_position) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    id, user.id, body.text, prep.tags, prep.model, prep.rating, count, body.seed ?? null, jobId, "queued", typeof qp === "number" ? qp : null);
   return c.json({ item: await itemOf(c.env, (await getGen(c.env, id, user.id))!) }, 201);
 });
 

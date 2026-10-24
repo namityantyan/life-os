@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -7,7 +7,7 @@ import { D1Shim, migrate } from "../../hub/d1";
 import { dirImageStore } from "../../server/shims";
 import type { AppEnv, Env } from "../../worker/env";
 import { routes, syncPendingImages } from "../../worker/modules/images/routes";
-import { guardText, hasTerm, normalizeTags, parseConversion, decideRating, looksLikeTags, clampCount, refuseMessage, serviceError } from "../../worker/modules/images/logic";
+import { guardText, hasTerm, normalizeTags, parseConversion, decideRating, looksLikeTags, clampCount, refuseMessage, serviceError, systemPromptFor, IMAGE_SYSTEM_PROMPT, PHOTO_SYSTEM_PROMPT } from "../../worker/modules/images/logic";
 
 describe("images guard", () => {
   it("refuses minor terms always (same list as the service)", () => {
@@ -94,7 +94,7 @@ type Svc = { health?: () => Response; generate?: (body: any) => Response; job?: 
 
 function setup(opts: { configured?: boolean; ai?: unknown | "down" } = {}) {
   const db = new D1Shim(":memory:");
-  migrate(db, [{ name: "0014_images.sql", sql: readFileSync("migrations/0014_images.sql", "utf8") }]);
+  migrate(db, readdirSync("migrations").filter((f) => f.endsWith(".sql")).sort().map((name) => ({ name, sql: readFileSync(`migrations/${name}`, "utf8") })));
   const ai = opts.ai === "down" ? undefined : { run: vi.fn(async () => ({ response: JSON.stringify(opts.ai ?? { refuse: null, reason: "", tags: "1girl, solo, flower garden, white dress", rating: "all_ages", count: null }) })) };
   const env = { DB: db, AI: ai, ...(opts.configured === false ? {} : { IMGGEN_URL: "http://mac.test:18787/", IMGGEN_TOKEN: TOKEN }) } as unknown as Env;
   const app = new Hono<AppEnv>();
@@ -282,5 +282,112 @@ describe("image_input refusals from the AI", () => {
     expect(aiRefusal("image_input", "この写真をアニメ風にして")).toBe("image_input");
     expect(aiRefusal("image_input", "添付の画像を元に描いて")).toBe("image_input");
     expect(aiRefusal("real_person", "実写")).toBe("real_person");
+  });
+});
+
+/* ---------- photo model (RealVisXL V5.0) ---------- */
+
+describe("photo model: guard, prompt and tags", () => {
+  it("is all-ages only and strict about real people; anime is unchanged", () => {
+    const r = guardText("a woman in a park", "r18", "photo");
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.code).toBe("photo_r18"); expect(r.message).toContain("全年齢"); }
+    expect(guardText("R18の実写の女性", "all_ages", "photo").ok).toBe(false);
+    expect(guardText("woman in lingerie", "all_ages", "photo").ok).toBe(false);
+    expect(guardText("1girl, mature female, lingerie", "r18", "anime").ok).toBe(true);
+    for (const t of ["芸能人の写真", "有名な女優そっくりの顔", "a celebrity on the red carpet", "a woman who looks like a famous singer", "deepfake of my boss"]) {
+      const x = guardText(t, "all_ages", "photo");
+      expect(x.ok, t).toBe(false);
+      if (!x.ok) expect(x.code, t).toBe("real_person");
+    }
+    expect(guardText("a celebrity", "all_ages", "anime").ok).toBe(true); // anime keeps its own (AI) real-person check
+    expect(guardText("日本人の女性がカフェで本を読んでいる", "all_ages", "photo").ok).toBe(true);
+    expect(guardText("a man fixing a factor in the workshop", "all_ages", "photo").ok).toBe(true);
+    expect(guardText("小学生の女の子", "all_ages", "photo").ok).toBe(false);
+  });
+  it("uses a separate conversion prompt and drops the photo-quality words the service adds", () => {
+    expect(systemPromptFor("anime")).toBe(IMAGE_SYSTEM_PROMPT);
+    expect(systemPromptFor("photo")).toBe(PHOTO_SYSTEM_PROMPT);
+    expect(PHOTO_SYSTEM_PROMPT).toContain("RealVisXL");
+    expect(PHOTO_SYSTEM_PROMPT).toContain("danbooruタグ（1girl, solo など）は使わない");
+    expect(PHOTO_SYSTEM_PROMPT).toContain("\"real_person\"");
+    expect(PHOTO_SYSTEM_PROMPT).toContain("「実写」「写真風」「リアル」などの画風の指定はこれに当たらない");
+    expect(normalizeTags("a woman in a park, Photorealistic, RAW photo, 8k, masterpiece, soft light", "photo")).toBe("a woman in a park, soft light");
+    expect(normalizeTags("1girl, realistic", "anime")).toBe("1girl, realistic");
+    expect(parseConversion({ refuse: null, tags: "a woman", rating: "r18" }, "photo")!.rating).toBe("all_ages");
+    expect(refuseMessage("adult")).toContain("全年齢");
+  });
+});
+
+describe("photo model routes", () => {
+  const photoAi = { refuse: null, reason: "", tags: "a woman in her twenties wearing a white sundress, standing in a flower field, soft sunlight, photorealistic", rating: "all_ages", count: null };
+  const healthWith = (models?: Record<string, boolean>) => () => json({ ok: true, comfyui: "up", model_available: true, queue_length: 0, ...(models ? { models } : {}) });
+
+  it("status reports which models the Mac has (older service = anime only)", async () => {
+    const t = setup();
+    svc.health = healthWith({ anime: true, photo: true });
+    expect((await (await t.req("/status")).json()).status.models).toEqual({ anime: true, photo: true });
+    svc.health = healthWith();
+    expect((await (await t.req("/status")).json()).status.models).toEqual({ anime: true, photo: false });
+  });
+
+  it("generates with the photo prompt, sends model=photo and stores it; history shows the model", async () => {
+    const t = setup({ ai: photoAi });
+    svc.health = healthWith({ anime: true, photo: true });
+    const r = await t.post("/generate", { text: "花畑で白いワンピースの女性。実写", model: "photo" });
+    expect(r.status).toBe(201);
+    const { item } = await r.json();
+    expect(item).toMatchObject({ model: "photo", rating: "all_ages", tags: "a woman in her twenties wearing a white sundress, standing in a flower field, soft sunlight" });
+    expect(calls.find((c) => c.url === "/v1/generate")!.body).toMatchObject({ model: "photo", rating: "all_ages" });
+    const sys = (t.ai!.run as any).mock.calls[0][1].messages[0].content as string;
+    expect(sys).toContain("RealVisXL");
+    expect((await t.post("/generate", { text: "猫" })).status).toBe(201); // default stays anime
+    const list = (await (await t.req("")).json()).items;
+    expect(list.map((g: any) => g.model).sort()).toEqual(["anime", "photo"]);
+    expect(calls.filter((c) => c.url === "/v1/generate")[1]!.body.model).toBe("anime");
+  });
+
+  it("refuses r18 for photo before calling the AI or the Mac", async () => {
+    for (const body of [{ text: "大人の女性", model: "photo", rating: "r18" }, { text: "R18で大人の女性", model: "photo" }]) {
+      calls = [];
+      const t = setup({ ai: photoAi });
+      const r = await t.post("/generate", body);
+      expect(r.status).toBe(422);
+      expect((await r.json()).error).toContain("実写モデルは全年齢のみ");
+      expect(t.ai!.run).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("refuses the AI's adult verdict and real-person words in the converted text", async () => {
+    let t = setup({ ai: { refuse: "adult", reason: "", tags: "", rating: "all_ages", count: null } });
+    expect((await (await t.post("/generate", { text: "きわどい水着の女性", model: "photo" })).json()).error).toContain("全年齢");
+    t = setup({ ai: { ...photoAi, tags: "a celebrity smiling" } });
+    svc.health = healthWith({ anime: true, photo: true });
+    expect((await t.post("/generate", { text: "笑顔の女性", model: "photo" })).status).toBe(422);
+    expect(calls.some((c) => c.url === "/v1/generate")).toBe(false);
+  });
+
+  it("says the photo model is missing instead of letting an older service draw anime", async () => {
+    const t = setup({ ai: photoAi });
+    svc.health = healthWith(); // service without `models`
+    const r = await t.post("/generate", { text: "花畑の女性", model: "photo" });
+    expect(r.status).toBe(503);
+    const b = await r.json();
+    expect(b.code).toBe("model_unavailable");
+    expect(b.error).toContain("セットアップをもう一度実行");
+    expect(calls.some((c) => c.url === "/v1/generate")).toBe(false);
+    svc.health = healthWith({ anime: true, photo: false });
+    expect((await t.post("/generate", { text: "花畑の女性", model: "photo" })).status).toBe(503);
+    expect((await t.post("/generate", { text: "花畑の女性", model: "oil" })).status).toBe(400);
+  });
+
+  it("migration 0015 adds model, defaulting existing rows to anime", async () => {
+    const db = new D1Shim(":memory:");
+    migrate(db, [{ name: "0014_images.sql", sql: readFileSync("migrations/0014_images.sql", "utf8") }]);
+    await db.prepare("INSERT INTO image_generations (id,user_id,prompt_text,tags) VALUES ('g1','u1','猫','cat')").run();
+    migrate(db, [{ name: "0015_image_generation_model.sql", sql: readFileSync("migrations/0015_image_generation_model.sql", "utf8") }]);
+    expect(await db.prepare("SELECT model FROM image_generations WHERE id='g1'").first("model")).toBe("anime");
+    expect(readdirSync("migrations").filter((f) => f.startsWith("0015_"))).toEqual(["0015_image_generation_model.sql"]);
   });
 });
