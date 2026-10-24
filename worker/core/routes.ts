@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import type { WeatherLocation } from "../../shared/types";
 import { normalizePushPrefs } from "../../shared/notifications";
+import { DESIGN_THEMES, TAB_BAR_MAX, TAB_BAR_MIN } from "../../shared/appearance";
 import { all, run, one, newId, getSetting, setSetting, kvPutSafe } from "./db";
 import { pushConfigured, sendToSubscriptions, userSubscriptions } from "./push";
 import { fetchWeather, WEATHER_CODE_LABEL } from "./weather";
@@ -58,6 +59,8 @@ coreRoutes.put("/settings/:key", async (c) => {
   if (key === "notification_prefs") z.record(z.string(), z.object({ push: z.boolean(), discord: z.boolean().optional() })).parse(value);
   if (key === "push_prefs") z.object({ modules: z.record(z.string(), z.boolean()), kinds: z.record(z.string(), z.boolean()) }).parse(value);
   if (key === "weather_location") z.object({ name: z.string(), lat: z.number(), lon: z.number() }).parse(value);
+  if (key === "ui_design") z.object({ design: z.enum(DESIGN_THEMES) }).parse(value);
+  if (key === "tab_bar") z.object({ keys: z.array(z.string().regex(/^[a-z0-9_]{1,32}$/)).min(TAB_BAR_MIN).max(TAB_BAR_MAX) }).parse(value);
   await setSetting(c.env, user.id, key, value);
   return c.json({ ok: true });
 });

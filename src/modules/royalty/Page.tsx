@@ -60,7 +60,7 @@ export default function Page() {
       {list.data && list.data.mails.length === 0 ? (
         <Card><EmptyState title="該当する明細通知はありません" hint="Gmailの同期、または「手動で登録」で追加できます。" /></Card>
       ) : (
-        <Stagger className="space-y-2" key={qs}>
+        <Stagger className="space-y-2">
           {list.data?.mails.map((m) => (
             <Item key={m.id}>
               <div data-testid={`mail-row-${m.id}`}><Card className={cx("flex flex-col md:flex-row md:items-center gap-3", m.processed && "opacity-60")}>

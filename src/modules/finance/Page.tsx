@@ -85,7 +85,7 @@ export default function Page() {
           {list.data && list.data.invoices.length === 0 ? (
             <Card><EmptyState title="この年の請求書はまだありません" hint="「請求書を追加」から記録すると、消費税と源泉徴収を自動計算します。" /></Card>
           ) : (
-            <Stagger className="space-y-2" key={year}>
+            <Stagger className="space-y-2">
               {list.data?.invoices.map((inv) => (
                 <Item key={inv.id}>
                   <div data-testid={`invoice-row-${inv.id}`}><Card onClick={() => setEditing(inv)} className="flex items-center gap-4">

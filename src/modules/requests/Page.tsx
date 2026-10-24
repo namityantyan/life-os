@@ -49,7 +49,7 @@ export default function Page() {
       {error && !data ? null : items.length === 0 ? (
         <EmptyState title={debounced ? "該当するリクエストはありません" : "リクエストはまだありません"} action={!debounced && filter === "all" ? <Button onClick={() => setModal({ mode: "new" })}>最初のリクエストを追加</Button> : undefined} />
       ) : (
-        <Stagger className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3" key={query}>
+        <Stagger className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
           <AnimatePresence initial={false}>
             {items.map((it) => (
               <Item key={it.id}>

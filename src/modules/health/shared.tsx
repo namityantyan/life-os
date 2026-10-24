@@ -24,7 +24,7 @@ export function NutrientBar({ label, unit, value, target, partial }: { label: st
   return (
     <div className="grid grid-cols-[7rem_1fr_auto] items-center gap-3 text-sm">
       <span className="text-label-2">{label}</span>
-      <div className="h-1.5 rounded-full bg-fill overflow-hidden"><motion.div className={cx("h-full rounded-full", partial ? "bg-label-3" : "bg-accent")} initial={{ width: 0 }} animate={{ width: `${ratio * 100}%` }} transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }} /></div>
+      <div className="h-1.5 rounded-full bg-fill overflow-hidden"><motion.div className={cx("h-full w-full rounded-full origin-left", partial ? "bg-label-3" : "bg-accent")} initial={{ scaleX: 0 }} animate={{ scaleX: ratio }} transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }} /></div>
       <span className="tabular text-right whitespace-nowrap">{value == null ? "—" : fmtNum(value, unit === "g" || unit === "mg" ? 1 : 0)}{target != null ? <span className="text-label-3"> / {fmtNum(target, 0)}</span> : null} <span className="text-label-3 text-xs">{unit}</span></span>
     </div>
   );

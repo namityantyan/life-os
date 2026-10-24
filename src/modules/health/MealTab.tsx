@@ -1,3 +1,4 @@
+import { Icon } from "@/components/icons";
 /**
  * 食事: a log of what was actually eaten each day. Saved sets ("いつもの食事") and saved foods
  * ("よく食べるもの") are added with one tap; nutrition is copied into the entry at that moment.
@@ -132,9 +133,9 @@ export function MealTab() {
         <Card as="section" className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1">
-              <IconButton label="前の日" onClick={() => setDay(shiftDay(day, -1))} data-testid="day-prev">‹</IconButton>
+              <IconButton label="前の日" onClick={() => setDay(shiftDay(day, -1))} data-testid="day-prev"><Icon name="chevron-left" /></IconButton>
               <span className="font-semibold tracking-tight tabular min-w-24 text-center" data-testid="day-label">{dayLabel(day)}</span>
-              <IconButton label="次の日" onClick={() => setDay(shiftDay(day, 1))} data-testid="day-next" disabled={day >= todayJst()}>›</IconButton>
+              <IconButton label="次の日" onClick={() => setDay(shiftDay(day, 1))} data-testid="day-next" disabled={day >= todayJst()}><Icon name="chevron-right" /></IconButton>
               {day !== todayJst() && <Button size="sm" variant="ghost" onClick={() => setDay(todayJst())}>今日へ</Button>}
             </div>
             <div className="flex items-center gap-2">
@@ -191,7 +192,7 @@ export function MealTab() {
                         {f.name}
                         {f.nutrition?.energy_kcal != null && <span className="text-xs opacity-60 ml-1 tabular">{fmtNum(f.nutrition.energy_kcal)}</span>}
                       </Button>
-                      <button className="absolute -top-1.5 -right-1.5 size-5 rounded-full bg-fill-strong text-label-2 text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity" aria-label={`${f.name}を編集`} onClick={() => setFoodEditing(f)}>✎</button>
+                      <button className="absolute -top-1.5 -right-1.5 size-6 grid place-items-center rounded-full bg-elevated shadow-[var(--shadow-card)] text-label-2 opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity" aria-label={`${f.name}を編集`} onClick={() => setFoodEditing(f)}><Icon name="edit" size={14} /></button>
                     </div>
                   ))}
                 </div>
@@ -220,7 +221,7 @@ export function MealTab() {
                     </div>
                     {e.nutrition_source !== "table" && e.nutrition_source !== "recorded" && <Button size="sm" variant="ghost" onClick={() => estimateEntry(e)} loading={estimating === e.id} aria-label={`${e.food_name}の栄養を成分表で計算`} data-testid="meal-estimate">成分表で計算</Button>}
                     <Button size="sm" variant="ghost" onClick={() => setEditing(e)} aria-label={`${e.food_name}を編集`}>編集</Button>
-                    <IconButton label={`${e.food_name}を削除`} className="text-red hover:text-red" onClick={() => removeEntry(e)}>✕</IconButton>
+                    <IconButton label={`${e.food_name}を削除`} className="hover:text-red" onClick={() => removeEntry(e)}><Icon name="delete" size={18} /></IconButton>
                   </Item>
                 ))}
               </Stagger>
@@ -289,10 +290,10 @@ function ProposalCard({ item, entries, targets, day, onApplied }: {
     if (op.op === "add") return { tag: "記録に追加", tone: "green" as const, text: `${op.food_name} ${amountText(op.amount, op.unit)}`, sub: [kcalText(op.nutrition), op.nutrition ? "栄養は推定" : "栄養未計算", op.cost != null ? fmtYen(op.cost) : null, op.save_as_food ? "よく食べるものにも登録" : null].filter(Boolean).join("・") };
     if (op.op === "remove") { const cur = entries.find((m) => m.id === op.id); return { tag: "削除", tone: "red" as const, text: op.food_name, sub: cur ? amountText(cur.amount, cur.unit) : "" }; }
     const cur = entries.find((m) => m.id === op.id); const ch = op.changes; const parts: string[] = [];
-    if (ch.food_name) parts.push(`名前 → ${ch.food_name}`);
-    if (ch.amount !== undefined) parts.push(`${amountText(cur?.amount, cur?.unit)} → ${amountText(ch.amount, ch.unit ?? cur?.unit)}`);
-    if (ch.cost !== undefined) parts.push(`費用 → ${ch.cost == null ? "未入力" : fmtYen(ch.cost)}`);
-    if (ch.nutrition) parts.push(`栄養 → ${kcalText(ch.nutrition) ?? "更新"}（推定）`);
+    if (ch.food_name) parts.push(`名前を「${ch.food_name}」に`);
+    if (ch.amount !== undefined) parts.push(`量を${amountText(cur?.amount, cur?.unit)}から${amountText(ch.amount, ch.unit ?? cur?.unit)}に`);
+    if (ch.cost !== undefined) parts.push(`費用を${ch.cost == null ? "未入力" : fmtYen(ch.cost)}に`);
+    if (ch.nutrition) parts.push(`栄養を${kcalText(ch.nutrition) ?? "更新"}に（推定）`);
     else if (ch.amount != null && cur?.nutrition) parts.push("栄養は量に合わせて換算（推定）");
     return { tag: "変更", tone: "accent" as const, text: op.food_name, sub: parts.join("、") };
   };
@@ -334,7 +335,7 @@ function ProposalCard({ item, entries, targets, day, onApplied }: {
           <label className="flex items-center gap-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={useTargets} disabled={!!applied || busy} onChange={(e) => setUseTargets(e.target.checked)} aria-label="目標値を変更する" /><Badge tone="purple">目標</Badge><span>1日の目標値を変更</span></label>
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 gap-y-0.5 pl-6 text-xs tabular" data-testid="meal-proposal-targets">
             {targetRows.map(([k, v]) => { const n = nutrientLabel(k); return (
-              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(targets[k], 1) : "未設定"}</span><span className="text-label-3">→</span><span className="text-right font-medium">{fmtNum(v, 1)}{n.unit}</span></div>
+              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(targets[k], 1) : "未設定"}</span><Icon name="arrow-right" size={14} className="text-label-3 self-center" title="から" /><span className="text-right font-medium">{fmtNum(v, 1)}{n.unit}</span></div>
             ); })}
           </div>
         </div>
@@ -617,7 +618,7 @@ function SetsModal({ open, sets, foods, onClose, onChanged }: { open: boolean; s
               {s.items.map((m) => (
                 <li key={m.id} className="flex items-center gap-2 text-sm">
                   <span className="flex-1 min-w-0 truncate">{m.food_name}{m.amount != null && <span className="text-label-2 tabular"> {fmtNum(m.amount, 1)}{m.unit ?? ""}</span>}</span>
-                  <IconButton label={`${m.food_name}をセットから外す`} className="text-red hover:text-red size-7" onClick={() => act(async () => { await api.del(`/health/meals/sets/${s.id}/items/${m.id}`); })}>✕</IconButton>
+                  <IconButton label={`${m.food_name}をセットから外す`} className="hover:text-red size-8 md:size-8" onClick={() => act(async () => { await api.del(`/health/meals/sets/${s.id}/items/${m.id}`); })}><Icon name="close" size={16} /></IconButton>
                 </li>
               ))}
               {s.items.length === 0 && <li className="text-xs text-label-3">まだ食品がありません。</li>}

@@ -224,7 +224,7 @@ function AccountsTab({ accounts, onChanged }: { accounts: AssetAccount[]; onChan
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="font-medium">{fs?.connected ? "接続済み" : "未接続"}{fs?.connected && fs.companies.length > 0 && <span className="text-label-2 font-normal">・{fs.companies.map((c) => c.name).join("、")}</span>}</div>
-              <div className="text-xs text-label-2 mt-0.5">{!fs?.configured ? "FREEE_CLIENT_ID / FREEE_CLIENT_SECRET が未設定のため接続できません。" : fs.last_sync ? `最終確認 ${fmtDateTime(fs.last_sync.at)}・${fs.last_sync.checked}口座・古い ${fs.last_sync.stale}件${fs.last_sync.errors.length ? `・エラー: ${fs.last_sync.errors.join(" / ")}` : ""}` : "約1時間ごとにfreeeへ保存された銀行同期残高を読みます。銀行→freeeの同期は強制しません。"}</div>
+              <div className="text-xs text-label-2 mt-0.5">{!fs?.configured ? "FREEE_CLIENT_ID / FREEE_CLIENT_SECRET が未設定のため接続できません。" : fs.last_sync ? `最終確認 ${fmtDateTime(fs.last_sync.at)}・${fs.last_sync.checked}口座・古い ${fs.last_sync.stale}件${fs.last_sync.errors.length ? `・エラー: ${fs.last_sync.errors.join(" / ")}` : ""}` : "約1時間ごとにfreeeへ保存された銀行同期残高を読みます。銀行からfreeeへの同期は強制しません。"}</div>
             </div>
             {fs?.connected ? <><Button onClick={sync} loading={syncing} data-testid="freee-sync">銀行残高を更新</Button><Button variant="danger" onClick={disconnect}>接続を解除</Button></> : <Button variant="primary" onClick={connect} disabled={!fs?.configured} data-testid="freee-connect">freeeと接続</Button>}
           </div>

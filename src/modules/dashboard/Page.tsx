@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import type { LifeContext, PressureAssessment } from "@shared/types";
 import { api, useApi, fmtYen, fmtNum, fmtDate, fmtDateTime } from "@/lib/api";
-import { Badge, Button, Card, Input, PageSkeleton, Stat, EmptyState, ErrorBanner, cx, useToast } from "@/components/ui";
+import { Badge, Button, Card, Input, PageSkeleton, Stat, EmptyState, ErrorBanner, cx, useToast, quick } from "@/components/ui";
+import { Icon } from "@/components/icons";
 
 type Dash = {
   context: LifeContext; suggestion: string; today: string;
@@ -95,7 +96,7 @@ export default function Page() {
     clock: (
       <Card className="h-full flex flex-col justify-between gap-6">
         <Clock weather={weatherLine} />
-        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="text-lg leading-relaxed text-label" data-testid="suggestion">{data.suggestion}</motion.p>
+        <p className="text-lg leading-relaxed text-label" data-testid="suggestion">{data.suggestion}</p>
       </Card>
     ),
     weather: (
@@ -190,7 +191,7 @@ export default function Page() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-wrap items-center gap-1.5 mr-auto" data-testid="dash-hidden">
               <span className="text-xs text-label-3">非表示:</span>
               {hiddenEntries.map((e) => (
-                <button key={e.id} type="button" onClick={() => setHidden(e.id, false)} data-testid={`dash-card-show-${e.id}`} className="pressable focus-ring rounded-full bg-fill px-3 h-8 text-sm text-label-2 hover:text-label" aria-label={`${CARD_LABEL[e.id]}を表示に戻す`}>{CARD_LABEL[e.id]} ＋</button>
+                <button key={e.id} type="button" onClick={() => setHidden(e.id, false)} data-testid={`dash-card-show-${e.id}`} className="tap pressable focus-ring inline-flex items-center gap-1 rounded-full bg-fill pl-3 pr-2.5 h-8 text-sm text-label-2 hover:text-label" aria-label={`${CARD_LABEL[e.id]}を表示に戻す`}>{CARD_LABEL[e.id]}<Icon name="plus" size={16} /></button>
               ))}
             </motion.div>
           )}
@@ -201,13 +202,13 @@ export default function Page() {
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 auto-rows-min">
         <AnimatePresence initial={false}>
           {visible.map((e, i) => (
-            <motion.div key={e.id} layout={editing} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }} transition={{ type: "spring", stiffness: 420, damping: 36 }}
+            <motion.div key={e.id} layout={editing} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={quick}
               className={cx("relative", span[e.id])} data-testid={`dash-card-${e.id}`}>
               {editing && (
-                <div className="absolute top-2 right-2 z-10 flex items-center gap-1 glass rounded-full px-1 h-8 shadow-[var(--shadow-card)]" data-testid={`dash-card-controls-${e.id}`}>
-                  <button type="button" aria-label={`${CARD_LABEL[e.id]}を上へ`} disabled={i === 0} onClick={() => move(e.id, -1)} data-testid={`dash-card-up-${e.id}`} className="focus-ring size-7 rounded-full grid place-items-center text-sm text-label-2 hover:bg-fill disabled:opacity-30">↑</button>
-                  <button type="button" aria-label={`${CARD_LABEL[e.id]}を下へ`} disabled={i === visible.length - 1} onClick={() => move(e.id, 1)} data-testid={`dash-card-down-${e.id}`} className="focus-ring size-7 rounded-full grid place-items-center text-sm text-label-2 hover:bg-fill disabled:opacity-30">↓</button>
-                  <button type="button" onClick={() => setHidden(e.id, true)} data-testid={`dash-card-hide-${e.id}`} aria-label={`${CARD_LABEL[e.id]}を非表示にする`} className="focus-ring h-7 rounded-full px-2 text-xs text-label-2 hover:bg-fill">非表示</button>
+                <div className="absolute top-2 right-2 z-10 flex items-center gap-1 popover rounded-full px-1 h-10" data-testid={`dash-card-controls-${e.id}`}>
+                  <button type="button" aria-label={`${CARD_LABEL[e.id]}を上へ`} disabled={i === 0} onClick={() => move(e.id, -1)} data-testid={`dash-card-up-${e.id}`} className="tap focus-ring size-8 rounded-full grid place-items-center text-label-2 hover:bg-fill disabled:opacity-30"><Icon name="arrow-up" size={16} /></button>
+                  <button type="button" aria-label={`${CARD_LABEL[e.id]}を下へ`} disabled={i === visible.length - 1} onClick={() => move(e.id, 1)} data-testid={`dash-card-down-${e.id}`} className="tap focus-ring size-8 rounded-full grid place-items-center text-label-2 hover:bg-fill disabled:opacity-30"><Icon name="arrow-down" size={16} /></button>
+                  <button type="button" onClick={() => setHidden(e.id, true)} data-testid={`dash-card-hide-${e.id}`} aria-label={`${CARD_LABEL[e.id]}を非表示にする`} className="tap focus-ring h-8 rounded-full px-2.5 text-xs text-label-2 hover:bg-fill">非表示</button>
                 </div>
               )}
               <div className={cx("h-full", editing && "pointer-events-none select-none opacity-90")}>{cardBody[e.id]}</div>
@@ -230,5 +231,5 @@ function Sparkline({ series }: { series: { time: string; hpa: number | null }[] 
   const min = Math.min(...pts.map((p) => p.hpa)), max = Math.max(...pts.map((p) => p.hpa));
   const W = 300, H = 48;
   const d = pts.map((p, i) => `${(i / (pts.length - 1)) * W},${H - ((p.hpa - min) / Math.max(1, max - min)) * (H - 6) - 3}`).join(" ");
-  return <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-12 mt-3 text-accent" preserveAspectRatio="none" aria-hidden><motion.polyline initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 1 }} fill="none" stroke="currentColor" strokeWidth="2" points={d} /></svg>;
+  return <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-12 mt-3 text-accent" preserveAspectRatio="none" aria-hidden><motion.polyline initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.4, ease: "easeOut" }} fill="none" stroke="currentColor" strokeWidth="2" points={d} /></svg>;
 }

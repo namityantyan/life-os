@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Icon } from "@/components/icons";
 import { AnimatePresence, motion } from "motion/react";
 import { api } from "@/lib/api";
 import { Badge, Button, ChatPanel, IconButton, cx, useToast, type ChatMsg } from "@/components/ui";
@@ -75,17 +76,17 @@ export function AssistantPanel({ open, onOpenChange }: { open: boolean; onOpenCh
     <AnimatePresence>
       {open && (
         <motion.div className="fixed inset-0 z-[65]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={close} />
+          <div className="scrim absolute inset-0" onClick={close} />
           <motion.aside role="dialog" aria-modal="true" aria-label="総合アシスタント" data-testid="assistant-panel"
-            initial={{ x: "100%", y: 0 }} animate={{ x: 0, y: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", stiffness: 420, damping: 38 }}
-            className="absolute right-0 top-0 h-full w-full md:w-[26rem] glass shadow-[var(--shadow-pop)] hairline md:border-l border-separator flex flex-col
+            initial={{ x: "100%", y: 0 }} animate={{ x: 0, y: 0 }} exit={{ x: "100%" }} transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+            className="sheet absolute right-0 top-0 h-full w-full md:w-[26rem] md:border-l border-separator flex flex-col
                        max-md:top-auto max-md:bottom-0 max-md:h-[88dvh] max-md:rounded-t-[var(--radius-xl)]">
             <div className="flex items-center gap-2 px-4 h-14 border-b border-separator shrink-0">
               <div className="font-semibold tracking-tight">アシスタント</div>
               <kbd className="hidden md:inline text-xs text-label-3 bg-fill rounded px-1.5 py-0.5">⌘J</kbd>
               <div className="flex-1" />
               {messages.length > 0 && <Button size="sm" variant="ghost" onClick={clear} data-testid="assistant-clear">履歴を消す</Button>}
-              <IconButton label="閉じる" onClick={close} data-testid="assistant-close">✕</IconButton>
+              <IconButton label="閉じる" onClick={close} data-testid="assistant-close"><Icon name="close" /></IconButton>
             </div>
             <div className="px-4 py-3 border-b border-separator shrink-0" data-testid="assistant-briefing" aria-label="今日の要点">
               {!briefing && <div className="h-6 skeleton w-2/3" />}
@@ -107,13 +108,13 @@ export function AssistantPanel({ open, onOpenChange }: { open: boolean; onOpenCh
                 actions={(
                   <>
                     {loaded && messages.length === 0 && PROMPTS.map((p) => (
-                      <button key={p} type="button" onClick={() => send(p)} data-testid="assistant-prompt" className={cx("pressable focus-ring rounded-full bg-fill px-3 h-8 text-sm text-label-2 hover:text-label")}>{p}</button>
+                      <button key={p} type="button" onClick={() => send(p)} data-testid="assistant-prompt" className={cx("tap pressable focus-ring rounded-full bg-fill px-3 h-8 text-sm text-label-2 hover:text-label")}>{p}</button>
                     ))}
                     {lastWithActions?.actions?.map((a, i) => {
                       const key = `${lastIdx}:${i}`; const done = applied.has(key);
                       return (
                         <button key={key} type="button" disabled={done} onClick={() => apply(a, key)} data-testid="assistant-action" title={a.title}
-                          className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm max-w-full truncate", done ? "bg-fill text-label-3" : "bg-accent-soft text-accent")}>
+                          className={cx("tap pressable focus-ring rounded-full px-3 h-8 text-sm max-w-full truncate", done ? "bg-fill text-label-3" : "bg-accent-soft text-accent")}>
                           {done ? "追加済み: " : `${ACTION_LABEL[a.type]}: `}{a.title}
                         </button>
                       );

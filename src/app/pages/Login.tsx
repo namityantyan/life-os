@@ -8,7 +8,7 @@ export default function Login() {
   const err = new URLSearchParams(location.search).get("error");
   return (
     <div className="min-h-dvh grid place-items-center p-6">
-      <motion.div initial={{ opacity: 0, y: 12, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.4, ease: [0.2, 0.8, 0.2, 1] }} className="card w-full max-w-sm p-8 text-center space-y-6">
+      <motion.div initial={{ opacity: 0, y: 12, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }} className="card w-full max-w-sm p-8 text-center space-y-6">
         <div className="mx-auto size-14 rounded-2xl bg-label text-bg grid place-items-center text-2xl font-bold">L</div>
         <div><h1 className="text-2xl font-bold tracking-tight">Life OS</h1></div>
         {err === "not_allowed" && <p className="text-red text-sm">このGoogleアカウントは許可されていません。</p>}

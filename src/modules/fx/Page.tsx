@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Icon } from "@/components/icons";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { PageHeader, Card, Section, Badge, Button, Segmented, Select, Field, Input, Textarea, Toggle, Stat, PageSkeleton, EmptyState, ErrorBanner, Stagger, Item, Table, Th, Td, trCls, useToast, cx } from "@/components/ui";
 import { api, useApi, fmtDateTime, fmtNum } from "@/lib/api";
@@ -149,8 +150,8 @@ function ChartTab() {
         <Segmented value={span} onChange={(v) => { setSpan(v); }} options={SPANS.map((s) => ({ value: s.value, label: s.label }))} />
         <Segmented value={tf} onChange={setTf} options={(["M5", "H1", "H4", "D1"] as Timeframe[]).map((t) => ({ value: t, label: t }))} />
         <div className="flex-1" />
-        <Button size="sm" onClick={() => shift(-1)} aria-label="前の期間へ">‹ 前</Button>
-        <Button size="sm" onClick={() => shift(1)} disabled={to == null} aria-label="次の期間へ">次 ›</Button>
+        <Button size="sm" onClick={() => shift(-1)} aria-label="前の期間へ"><Icon name="chevron-left" />前</Button>
+        <Button size="sm" onClick={() => shift(1)} disabled={to == null} aria-label="次の期間へ">次<Icon name="chevron-right" /></Button>
         <Button size="sm" variant={fitAll ? "tinted" : "secondary"} aria-pressed={fitAll} onClick={() => setFitAll((v) => !v)} data-testid="fx-fit-all">全水準表示</Button>
         <Button size="sm" variant="ghost" onClick={() => reload(true)} loading={loading && Boolean(data)}>更新</Button>
       </div>

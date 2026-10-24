@@ -1,15 +1,16 @@
 import { motion, AnimatePresence } from "motion/react";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes, type TdHTMLAttributes, type ThHTMLAttributes } from "react";
+import { Icon } from "@/components/icons";
+import { Children, cloneElement, isValidElement, createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes, type TdHTMLAttributes, type ThHTMLAttributes } from "react";
 
 export const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
 /* ---------- Buttons ---------- */
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger" | "tinted"; size?: "sm" | "md" | "lg"; loading?: boolean };
 export function Button({ variant = "secondary", size = "md", loading, className, children, disabled, ...rest }: BtnProps) {
-  const base = "pressable focus-ring inline-flex items-center justify-center gap-1.5 font-medium rounded-[var(--radius-md)] whitespace-nowrap select-none disabled:opacity-40 disabled:pointer-events-none";
-  const sizes = { sm: "h-8 px-3 text-sm", md: "h-10 px-4 text-base", lg: "h-12 px-5 text-lg" }[size];
+  const base = "btn tap pressable focus-ring inline-flex items-center justify-center gap-1.5 font-medium whitespace-nowrap select-none disabled:opacity-40 disabled:pointer-events-none";
+  const sizes = { sm: "h-8 px-3 text-sm", md: "h-11 md:h-10 px-4 text-base", lg: "h-12 px-5 text-lg" }[size];
   const variants = {
-    primary: "bg-accent text-white hover:brightness-110",
+    primary: "bg-accent text-on-accent hover:brightness-110",
     secondary: "bg-fill text-label hover:bg-fill-strong",
     tinted: "bg-accent-soft text-accent hover:brightness-105",
     ghost: "text-accent hover:bg-fill",
@@ -21,7 +22,7 @@ export function Spinner({ className }: { className?: string }) {
   return <span className={cx("inline-block size-4 rounded-full border-2 border-current border-t-transparent animate-spin", className)} />;
 }
 export function IconButton({ className, children, label, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button aria-label={label} title={label} className={cx("pressable focus-ring inline-flex size-9 items-center justify-center rounded-full text-label-2 hover:bg-fill hover:text-label", className)} {...rest}>{children}</button>;
+  return <button aria-label={label} title={label} className={cx("tap pressable focus-ring inline-flex size-10 md:size-9 shrink-0 items-center justify-center rounded-full text-label-2 hover:bg-fill hover:text-label disabled:opacity-35 disabled:pointer-events-none", className)} {...rest}>{children}</button>;
 }
 
 /* ---------- Surfaces ---------- */
@@ -32,7 +33,7 @@ export function Card({ className, children, onClick, padded = true, as = "div", 
 export function Section({ title, action, children, className }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <section className={cx("space-y-3", className)}>
-      {(title || action) && <div className="flex items-end justify-between px-1"><h2 className="text-lg font-semibold tracking-tight">{title}</h2>{action}</div>}
+      {(title || action) && <div className="flex items-end justify-between px-1"><h2 className="text-lg font-semibold tracking-tight text-label">{title}</h2>{action}</div>}
       {children}
     </section>
   );
@@ -40,9 +41,9 @@ export function Section({ title, action, children, className }: { title?: ReactN
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   useEffect(() => { document.title = `Life OS｜${title}`; }, [title]);
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }} className="flex flex-wrap items-end justify-between gap-3 mb-6">
-      <div><h1 className="text-3xl font-bold tracking-tight">{title}</h1>{subtitle && <p className="text-label-2 mt-1 text-sm">{subtitle}</p>}</div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={quick} className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2 mb-5 md:mb-7">
+      <div className="min-w-0"><h1 className="page-title text-[1.75rem] leading-tight md:text-3xl">{title}</h1>{subtitle && <p className="text-label-2 mt-1 text-sm">{subtitle}</p>}</div>
+      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </motion.div>
   );
 }
@@ -52,10 +53,10 @@ export function Stat({ label, value, hint, tone }: { label: string; value: React
 }
 export function Badge({ children, tone = "neutral", className }: { children: ReactNode; tone?: "neutral" | "accent" | "green" | "red" | "orange" | "purple"; className?: string }) {
   const t = { neutral: "bg-fill text-label-2", accent: "bg-accent-soft text-accent", green: "bg-green/15 text-green", red: "bg-red/15 text-red", orange: "bg-orange/15 text-orange", purple: "bg-purple/15 text-purple" }[tone];
-  return <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", t, className)}>{children}</span>;
+  return <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0", t, className)}>{children}</span>;
 }
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
-  return <div className="flex flex-col items-center justify-center text-center py-12 gap-2"><div className="text-label-2 font-medium">{title}</div>{hint && <div className="text-label-3 text-sm max-w-xs">{hint}</div>}{action && <div className="mt-2">{action}</div>}</div>;
+  return <div className="flex flex-col items-center justify-center text-center py-10 gap-1.5"><div className="text-label-2 font-medium">{title}</div>{hint && <div className="text-label-3 text-sm max-w-xs">{hint}</div>}{action && <div className="mt-2">{action}</div>}</div>;
 }
 export function Divider() { return <div className="h-px bg-separator" />; }
 /** Inline load-failure banner with a retry button. Pages keep rendering whatever data they already have. */
@@ -129,17 +130,17 @@ export function ListSkeleton({ rows = 5 }: { rows?: number }) {
 }
 
 /* ---------- Inputs ---------- */
-const inputCls = "focus-ring w-full h-10 px-3 rounded-[var(--radius-md)] bg-fill text-label placeholder:text-label-3 outline-none transition-[box-shadow] focus:shadow-[0_0_0_3px_var(--accent-soft)]";
+const inputCls = "control focus-ring w-full h-11 md:h-10 px-3 bg-fill text-label placeholder:text-label-3 outline-none transition-[box-shadow] focus:shadow-[0_0_0_3px_var(--accent-soft)]";
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) { return <input className={cx(inputCls, className)} {...rest} />; }
 export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) { return <textarea className={cx(inputCls, "h-auto min-h-24 py-2 resize-y", className)} {...rest} />; }
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) { return <select className={cx(inputCls, "appearance-none pr-8", className)} {...rest}>{children}</select>; }
 export function Field({ label, children, hint, className }: { label: string; children: ReactNode; hint?: string; className?: string }) {
-  return <label className={cx("block space-y-1.5", className)}><span className="text-xs font-medium text-label-2">{label}</span>{children}{hint && <span className="block text-xs text-label-3">{hint}</span>}</label>;
+  return <label className={cx("block space-y-1.5", className)}><span className="block text-xs font-medium text-label-2">{label}</span>{children}{hint && <span className="block text-xs text-label-3">{hint}</span>}</label>;
 }
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
-    <button role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={cx("focus-ring relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors", checked ? "bg-green" : "bg-fill-strong")}>
-      <motion.span layout transition={{ type: "spring", stiffness: 600, damping: 35 }} className={cx("absolute size-6 rounded-full bg-white shadow", checked ? "left-[calc(100%-1.625rem)]" : "left-0.5")} />
+    <button role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={cx("tap focus-ring relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors", checked ? "bg-green" : "bg-fill-strong")}>
+      <motion.span layout transition={quick} className={cx("absolute size-6 rounded-full bg-white shadow", checked ? "left-[calc(100%-1.625rem)]" : "left-0.5")} />
     </button>
   );
 }
@@ -154,8 +155,8 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
   return (
     <div ref={ref} className={cx("inline-flex max-w-[calc(100vw-2rem)] overflow-x-auto p-0.5 rounded-[var(--radius-md)] bg-fill relative whitespace-nowrap", className)} role="tablist" data-testid={testId}>
       {options.map((o) => (
-        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("focus-ring relative z-10 px-3 h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
-          {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
+        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("tap focus-ring relative z-10 px-3 h-9 md:h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
+          {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={quick} />}
           {o.label}
         </button>
       ))}
@@ -169,11 +170,11 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
   return (
     <AnimatePresence>
       {open && (
-        <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-          <motion.div role="dialog" aria-modal="true" aria-label={title} initial={{ y: 40, opacity: 0, scale: 0.98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 40, opacity: 0, scale: 0.98 }} transition={{ type: "spring", stiffness: 400, damping: 34 }}
-            className={cx("relative w-full sm:w-auto sm:min-w-[28rem] max-h-[92dvh] overflow-auto bg-elevated rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] shadow-[var(--shadow-pop)] p-5 sm:p-6", wide ? "sm:max-w-4xl sm:w-[56rem]" : "sm:max-w-lg")}>
-            {title && <div className="flex items-center justify-between mb-4"><h3 className="text-xl font-semibold tracking-tight">{title}</h3><IconButton label="閉じる" onClick={onClose}>✕</IconButton></div>}
+        <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={quick}>
+          <div className="scrim absolute inset-0" onClick={onClose} />
+          <motion.div role="dialog" aria-modal="true" aria-label={title} initial={{ y: 24, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 16, opacity: 0 }} transition={quick}
+            className={cx("sheet relative w-full sm:w-auto sm:min-w-[28rem] max-h-[92dvh] overflow-auto rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:p-6", wide ? "sm:max-w-4xl sm:w-[56rem]" : "sm:max-w-lg")}>
+            {title && <div className="flex items-center justify-between mb-4"><h3 className="text-xl font-semibold tracking-tight">{title}</h3><IconButton label="閉じる" onClick={onClose} className="-mr-2"><Icon name="close" /></IconButton></div>}
             {children}
             {footer && <div className="flex justify-end gap-2 mt-5">{footer}</div>}
           </motion.div>
@@ -193,7 +194,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={push}>{children}
       <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] md:bottom-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 items-center pointer-events-none">
         <AnimatePresence>{items.map((t) => (
-          <motion.div key={t.id} role="status" initial={{ y: 16, opacity: 0, scale: 0.95 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 8, opacity: 0, scale: 0.95 }} className={cx("glass rounded-full px-4 py-2 text-sm font-medium shadow-[var(--shadow-pop)]", t.tone === "error" && "text-red", t.tone === "success" && "text-green")}>{t.text}</motion.div>
+          <motion.div key={t.id} role="status" initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ opacity: 0 }} transition={quick} className={cx("popover rounded-full px-4 py-2 text-sm font-medium shadow-[var(--shadow-pop)]", t.tone === "error" && "text-red", t.tone === "success" && "text-green")}>{t.text}</motion.div>
         ))}</AnimatePresence>
       </div>
     </ToastCtx.Provider>
@@ -202,13 +203,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 export const useToast = () => useContext(ToastCtx);
 
 /* ---------- Animated list helpers ---------- */
-export const listVariants = { hidden: {}, show: { transition: { staggerChildren: 0.04 } } };
-export const itemVariants = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.2, 0.8, 0.2, 1] as const } } };
+/** Short entrance: 160ms per item, delay capped at the first 8 items (a 100-row list is visible after ~0.4s). Opacity/transform only; no layout animation by default. */
+export const ease = [0.2, 0.8, 0.2, 1] as const;
+export const quick = { duration: 0.16, ease };
+export const listVariants = { hidden: {}, show: {} };
+export const itemVariants = { hidden: { opacity: 0, y: 4 }, show: (i: number = 0) => ({ opacity: 1, y: 0, transition: { ...quick, delay: Math.min(i, 8) * 0.03 } }) };
 export function Stagger({ children, className }: { children: ReactNode; className?: string }) {
-  return <motion.div variants={listVariants} initial="hidden" animate="show" className={className}>{children}</motion.div>;
+  let n = 0;
+  const items = Children.map(children, (c) => (isValidElement<{ index?: number }>(c) && c.type === Item ? cloneElement(c, { index: n++ }) : c));
+  return <motion.div variants={listVariants} initial="hidden" animate="show" className={className}>{items}</motion.div>;
 }
-export function Item({ children, className, layout = true }: { children: ReactNode; className?: string; layout?: boolean }) {
-  return <motion.div layout={layout} variants={itemVariants} className={className}>{children}</motion.div>;
+export function Item({ children, className, layout = false, index = 0 }: { children: ReactNode; className?: string; layout?: boolean; index?: number }) {
+  return <motion.div layout={layout} variants={itemVariants} custom={index} className={className}>{children}</motion.div>;
 }
 
 /* ---------- Chat panel (shared by health / meal / beauty / FP / discord preview) ---------- */
@@ -242,8 +248,8 @@ export function ChatPanel({ messages, onSend, placeholder = "相談する…", b
         {messages.length === 0 && emptyHint && <div className="text-label-3 text-sm text-center py-8">{emptyHint}</div>}
         <AnimatePresence initial={false}>
           {messages.map((m, i) => (
-            <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cx("flex flex-col", m.role === "user" ? "items-end" : "items-start")}>
-              <div className={cx("max-w-[85%] rounded-[var(--radius-lg)] px-4 py-2.5 text-base whitespace-pre-wrap break-words leading-relaxed", m.role === "user" ? "bg-accent text-white rounded-br-[6px]" : "bg-fill rounded-bl-[6px]")}>
+            <motion.div key={i} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={quick} className={cx("flex flex-col", m.role === "user" ? "items-end" : "items-start")}>
+              <div className={cx("max-w-[85%] rounded-[var(--radius-lg)] px-4 py-2.5 text-base whitespace-pre-wrap break-words leading-relaxed", m.role === "user" ? "bg-accent text-on-accent rounded-br-[6px]" : "bg-fill rounded-bl-[6px]")}>
                 {m.content}{m.provider === "fallback" && <div className="text-xs opacity-60 mt-1">AI未接続</div>}
               </div>
               {m.role === "assistant" && renderExtra && <div className="max-w-[85%] w-full">{renderExtra(m, i)}</div>}

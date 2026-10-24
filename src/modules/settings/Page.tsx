@@ -7,6 +7,8 @@ import { Badge, Button, Card, Field, Input, PageHeader, PageSkeleton, Section, S
 import { IntegrationsCard } from "./IntegrationsCard";
 import { DataCard } from "./DataCard";
 import { NotificationsSection } from "./NotificationsCard";
+import { AppearanceCard } from "./AppearanceCard";
+import { TabBarCard } from "./TabBarCard";
 
 type SettingsRes = { settings: Record<string, any>; vapidPublicKey: string | null; integrations: Record<string, boolean> };
 
@@ -31,13 +33,14 @@ export default function Page() {
 
       <Section title="表示" className="scroll-mt-20"><div id="display" />
         <Card className="space-y-5">
-          <Field label="テーマ"><Segmented testId="theme-seg" value={prefs.theme} onChange={(v) => setPrefs({ theme: v })} options={[{ value: "light", label: "ライト" }, { value: "dark", label: "ダーク" }, { value: "system", label: "システム" }]} /></Field>
+          <AppearanceCard />
           <Slider label="文字サイズ" value={prefs.fontScale} min={0.85} max={1.3} step={0.05} onChange={(v) => setPrefs({ fontScale: v })} testId="font-scale" />
           <Slider label="余白" value={prefs.spaceScale} min={0.8} max={1.3} step={0.05} onChange={(v) => setPrefs({ spaceScale: v })} testId="space-scale" />
           <Slider label="角丸" value={prefs.radiusScale} min={0.5} max={1.5} step={0.1} onChange={(v) => setPrefs({ radiusScale: v })} />
           <div className="flex items-center justify-between"><span className="text-sm">アニメーションを減らす</span><Toggle checked={prefs.reduceMotion} onChange={(v) => setPrefs({ reduceMotion: v })} label="アニメーションを減らす" /></div>
           <Button variant="ghost" size="sm" onClick={() => setPrefs({ fontScale: 1, spaceScale: 1, radiusScale: 1 })}>標準に戻す</Button>
         </Card>
+        <Card className="space-y-3 scroll-mt-20"><div id="tabbar" /><div className="text-sm font-medium">下のバー（スマホ）</div><TabBarCard /></Card>
       </Section>
 
       <NotificationsSection />
