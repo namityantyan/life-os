@@ -13,6 +13,8 @@ export type Env = {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  /** Discord bot is off unless "1": the interactions endpoint and /api/discord/* answer 404. */
+  DISCORD_ENABLED?: string;
   DISCORD_PUBLIC_KEY?: string;
   DISCORD_APPLICATION_ID?: string;
   DISCORD_BOT_TOKEN?: string;

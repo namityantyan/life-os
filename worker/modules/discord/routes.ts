@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 import { z } from "zod";
 import { verifyKey } from "discord-interactions";
 import type { AppEnv, Env } from "../../env";
@@ -18,7 +19,12 @@ export { registerCommands };
  * Cloudflare Workers cannot hold a gateway websocket, so the bot only receives slash
  * commands (and PINGs) over HTTP. Every request is verified with the app's Ed25519 key.
  * ===================================================================================== */
+/** Kill switch: Discord is off (2026-10-24, replaced by Web Push) unless DISCORD_ENABLED=1. */
+export const discordEnabled = (env: Pick<Env, "DISCORD_ENABLED">) => env.DISCORD_ENABLED === "1";
+const off = createMiddleware<AppEnv>(async (c, next) => (discordEnabled(c.env) ? next() : c.json({ error: "discord disabled" }, 404)));
+
 export const publicRoutes = new Hono<AppEnv>();
+publicRoutes.use("*", off);
 
 const msg = (content: string, ephemeral = true) => ({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: truncateForDiscord(content), ...(ephemeral ? { flags: EPHEMERAL } : {}) } });
 
@@ -116,6 +122,7 @@ function waitUntil(c: { executionCtx: { waitUntil(p: Promise<unknown>): void } }
  * Authenticated: settings page / e2e hooks  (mounted at /api/discord)
  * ===================================================================================== */
 export const routes = new Hono<AppEnv>();
+routes.use("*", off);
 
 routes.get("/status", async (c) => {
   const user = c.get("user");

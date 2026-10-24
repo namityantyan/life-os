@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
-import type { NotificationPrefs, WeatherLocation } from "../../shared/types";
-import { all, run, one, getSetting, setSetting, kvPutSafe } from "./db";
-import { DEFAULT_PREFS, notify, processQueue } from "./notify";
+import type { WeatherLocation } from "../../shared/types";
+import { normalizePushPrefs } from "../../shared/notifications";
+import { all, run, one, newId, getSetting, setSetting, kvPutSafe } from "./db";
+import { pushConfigured, sendToSubscriptions, userSubscriptions } from "./push";
 import { fetchWeather, WEATHER_CODE_LABEL } from "./weather";
 import { buildLifeContext, suggestAction } from "./context";
 
@@ -24,24 +25,29 @@ coreRoutes.post("/notifications/read", async (c) => {
   else for (const id of body.ids ?? []) await run(c.env.DB, body.unread ? "UPDATE notifications SET read_at=NULL WHERE id=? AND user_id=?" : "UPDATE notifications SET read_at=datetime('now') WHERE id=? AND user_id=?", id, user.id);
   return c.json({ ok: true });
 });
+/** Test: always records in the bell and pushes to every registered device (ignores the module switches). */
 coreRoutes.post("/notifications/test", async (c) => {
   const user = c.get("user");
-  await notify(c.env, user.id, { kind: "system", title: "テスト通知", body: "Life OSからのテスト通知です。", url: "/settings#notifications" });
-  const r = await processQueue(c.env);
-  return c.json({ ok: true, delivery: r, pushConfigured: Boolean(c.env.VAPID_PUBLIC_KEY) });
+  const body = z.object({ id: z.string().optional() }).parse(await c.req.json().catch(() => ({})));
+  const id = newId();
+  const n = { title: "テスト通知", body: "Life OSからのテスト通知です。", url: "/settings#notifications" };
+  await run(c.env.DB, "INSERT INTO notifications (id,user_id,kind,title,body,url) VALUES (?,?,?,?,?,?)", id, user.id, "system", n.title, n.body, n.url);
+  const results = pushConfigured(c.env) ? await sendToSubscriptions(c.env, await userSubscriptions(c.env, user.id, body.id), { ...n, tag: id }, 600) : [];
+  return c.json({ ok: true, pushConfigured: pushConfigured(c.env), results, delivery: { sent: results.filter((r) => r.ok).length } });
 });
 
 // ---- Settings ----
 coreRoutes.get("/settings", async (c) => {
   const user = c.get("user");
   const rows = await all<{ key: string; value_json: string }>(c.env.DB, "SELECT key,value_json FROM settings WHERE user_id=?", user.id);
-  const settings: Record<string, unknown> = { notification_prefs: DEFAULT_PREFS };
+  const settings: Record<string, unknown> = {};
   for (const r of rows) { try { settings[r.key] = JSON.parse(r.value_json); } catch { /* ignore */ } }
+  settings.push_prefs = normalizePushPrefs(settings.push_prefs, settings.notification_prefs);
   const stored = await all<{ provider: string }>(c.env.DB, "SELECT provider FROM integration_tokens WHERE user_id=?", user.id);
   const has = (p: string) => stored.some((r) => r.provider === p);
   return c.json({ settings, vapidPublicKey: c.env.VAPID_PUBLIC_KEY ?? null, integrations: {
     google: Boolean(c.env.GOOGLE_CLIENT_ID), oura: Boolean(c.env.OURA_ACCESS_TOKEN) || has("oura"), freee: Boolean(c.env.FREEE_CLIENT_ID), freee_connected: has("freee"), google_calendar: has("google_calendar"), gmail: has("gmail"),
-    discord: Boolean(c.env.DISCORD_BOT_TOKEN), push: Boolean(c.env.VAPID_PUBLIC_KEY), backups: Boolean(c.env.BACKUP_INGEST_TOKEN), fx: Boolean(c.env.FX_CONNECTOR_TOKEN),
+    push: pushConfigured(c.env), backups: Boolean(c.env.BACKUP_INGEST_TOKEN), fx: Boolean(c.env.FX_CONNECTOR_TOKEN),
   } });
 });
 coreRoutes.put("/settings/:key", async (c) => {
@@ -49,30 +55,53 @@ coreRoutes.put("/settings/:key", async (c) => {
   const key = c.req.param("key");
   if (!/^[a-z0-9_]{1,64}$/.test(key)) return c.json({ error: "bad key" }, 400);
   const value = await c.req.json();
-  if (key === "notification_prefs") z.record(z.string(), z.object({ push: z.boolean(), discord: z.boolean() })).parse(value);
+  if (key === "notification_prefs") z.record(z.string(), z.object({ push: z.boolean(), discord: z.boolean().optional() })).parse(value);
+  if (key === "push_prefs") z.object({ modules: z.record(z.string(), z.boolean()), kinds: z.record(z.string(), z.boolean()) }).parse(value);
   if (key === "weather_location") z.object({ name: z.string(), lat: z.number(), lon: z.number() }).parse(value);
   await setSetting(c.env, user.id, key, value);
   return c.json({ ok: true });
 });
 
-// ---- Push subscriptions ----
+// ---- Push subscriptions (one row per browser / installed app) ----
+/** VAPID public key, and whether this browser's subscription is still registered with the current key. */
+coreRoutes.get("/push/config", async (c) => {
+  const user = c.get("user");
+  const endpoint = c.req.query("endpoint");
+  const row = endpoint ? await one<{ vapid_key: string | null }>(c.env.DB, "SELECT vapid_key FROM push_subscriptions WHERE endpoint=? AND user_id=?", endpoint, user.id) : null;
+  return c.json({ publicKey: pushConfigured(c.env) ? c.env.VAPID_PUBLIC_KEY : null, known: Boolean(row), stale: Boolean(row && row.vapid_key && row.vapid_key !== c.env.VAPID_PUBLIC_KEY) });
+});
 coreRoutes.get("/push/subscriptions", async (c) => {
   const user = c.get("user");
-  return c.json({ items: await all(c.env.DB, "SELECT id,endpoint,user_agent,label,enabled,created_at FROM push_subscriptions WHERE user_id=? ORDER BY created_at DESC", user.id) });
+  const items = await all<{ vapid_key: string | null }>(c.env.DB, "SELECT id,endpoint,user_agent,label,vapid_key,last_ok_at,last_error,created_at FROM push_subscriptions WHERE user_id=? AND enabled=1 ORDER BY created_at DESC", user.id);
+  return c.json({ items: items.map(({ vapid_key, ...r }) => ({ ...r, stale: Boolean(vapid_key && vapid_key !== c.env.VAPID_PUBLIC_KEY) })) });
 });
+const subSchema = z.object({ endpoint: z.string().url().startsWith("https://"), keys: z.object({ p256dh: z.string().min(80).max(100), auth: z.string().min(16).max(32) }) });
 coreRoutes.post("/push/subscribe", async (c) => {
   const user = c.get("user");
-  const body = z.object({ endpoint: z.string().url(), keys: z.object({ p256dh: z.string(), auth: z.string() }), label: z.string().optional() }).parse(await c.req.json());
-  await run(c.env.DB, "INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth,user_agent,label,enabled) VALUES (?,?,?,?,?,?,?,1) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, enabled=1, user_id=excluded.user_id",
-    crypto.randomUUID(), user.id, body.endpoint, body.keys.p256dh, body.keys.auth, c.req.header("User-Agent") ?? null, body.label ?? null);
+  const body = subSchema.extend({ label: z.string().max(60).optional(), replaces: z.string().optional() }).parse(await c.req.json());
+  if (body.replaces && body.replaces !== body.endpoint) await run(c.env.DB, "DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?", body.replaces, user.id);
+  await run(c.env.DB, "INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth,user_agent,label,enabled,vapid_key) VALUES (?,?,?,?,?,?,?,1,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, enabled=1, user_id=excluded.user_id, user_agent=excluded.user_agent, label=COALESCE(excluded.label, push_subscriptions.label), vapid_key=excluded.vapid_key, last_error=NULL",
+    newId(), user.id, body.endpoint, body.keys.p256dh, body.keys.auth, c.req.header("User-Agent")?.slice(0, 300) ?? null, body.label ?? null, c.env.VAPID_PUBLIC_KEY ?? null);
   return c.json({ ok: true });
 });
 coreRoutes.post("/push/unsubscribe", async (c) => {
   const user = c.get("user");
   const body = z.object({ endpoint: z.string().optional(), id: z.string().optional() }).parse(await c.req.json());
-  if (body.id) await run(c.env.DB, "UPDATE push_subscriptions SET enabled=0 WHERE id=? AND user_id=?", body.id, user.id);
-  if (body.endpoint) await run(c.env.DB, "UPDATE push_subscriptions SET enabled=0 WHERE endpoint=? AND user_id=?", body.endpoint, user.id);
+  if (body.id) await run(c.env.DB, "DELETE FROM push_subscriptions WHERE id=? AND user_id=?", body.id, user.id);
+  if (body.endpoint) await run(c.env.DB, "DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?", body.endpoint, user.id);
   return c.json({ ok: true });
+});
+
+/**
+ * Public (no session): the service worker's `pushsubscriptionchange` handler swaps in the browser's new
+ * subscription. The old endpoint is an unguessable capability URL, so it identifies the row.
+ */
+export const pushPublicRoutes = new Hono<AppEnv>();
+pushPublicRoutes.get("/config", (c) => c.json({ publicKey: pushConfigured(c.env) ? c.env.VAPID_PUBLIC_KEY : null }));
+pushPublicRoutes.post("/rotate", async (c) => {
+  const body = z.object({ oldEndpoint: z.string().url(), subscription: subSchema }).parse(await c.req.json());
+  const r = await run(c.env.DB, "UPDATE push_subscriptions SET endpoint=?, p256dh=?, auth=?, vapid_key=?, last_error=NULL WHERE endpoint=?", body.subscription.endpoint, body.subscription.keys.p256dh, body.subscription.keys.auth, c.env.VAPID_PUBLIC_KEY ?? null, body.oldEndpoint);
+  return c.json({ ok: Boolean(r.meta?.changes) }, r.meta?.changes ? 200 : 404);
 });
 
 // ---- Weather ----

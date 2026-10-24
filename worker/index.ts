@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv, Env } from "./env";
 import { authRoutes, requireAuth } from "./core/auth";
-import { coreRoutes } from "./core/routes";
+import { coreRoutes, pushPublicRoutes } from "./core/routes";
 import { runScheduled } from "./cron";
 import { registerModules, registerPublicModules } from "./modules";
 import { migrateSecrets } from "./selfhost-bridge";
@@ -17,7 +17,8 @@ app.onError((err, c) => {
 app.get("/api/health", (c) => c.json({ ok: true, app: c.env.APP_NAME, time: new Date().toISOString() }));
 app.route("/api/auth", authRoutes);
 
-// Public integration endpoints authenticate with their own tokens (backup PC, FX connector, Discord).
+// Public integration endpoints authenticate with their own tokens (backup PC, FX connector; Discord only when DISCORD_ENABLED=1).
+app.route("/api/integrations/push", pushPublicRoutes);
 registerPublicModules(app);
 
 const authed = new Hono<AppEnv>();

@@ -29,12 +29,14 @@ test("settings: theme toggle, notification pref toggle persists, weather locatio
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.getByTestId("theme-seg").locator('[data-value="light"]').click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  const row = page.getByTestId("pref-reminder");
-  const sw = row.getByRole("switch").nth(1);
+  const sw = page.getByTestId("push-module-planner").getByRole("switch");
   const before = await sw.getAttribute("aria-checked");
   await sw.click();
+  await expect.poll(async () => ((await (await page.request.get("/api/settings")).json()).settings.push_prefs.modules.planner)).toBe(before !== "true");
   await page.reload();
-  await expect(page.getByTestId("pref-reminder").getByRole("switch").nth(1)).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+  await expect(page.getByTestId("push-module-planner").getByRole("switch")).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+  await page.getByTestId("push-module-finance").getByRole("button", { name: "2種類" }).click();
+  await expect(page.getByTestId("push-kind-invoice")).toBeVisible();
   await page.getByTestId("geo-input").fill("渋谷");
   await page.getByTestId("geo-search").click();
   await page.getByTestId("geo-result").first().click();

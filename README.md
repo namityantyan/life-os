@@ -1,6 +1,6 @@
 # Life OS
 
-予定・健康・トレーニング・お金・FX・通知を一つの画面と Discord から管理する個人向けアプリ。
+予定・健康・トレーニング・お金・FX・通知を一つの画面で管理する個人向けアプリ。通知は Mac・Android などへの Web Push で届きます。
 仕様は [docs/SPEC.md](docs/SPEC.md)、モジュール実装の約束事は [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
 
 ## 構成
@@ -30,7 +30,7 @@ life-os/
 ### OS 部分と共有データ
 
 - **Life Context** (`worker/core/context.ts`): 睡眠・回復・歩数、筋トレ、予定・タスク、カード・現金、FX、メモを 1 つのスナップショットにまとめます。すべての AI 相談（健康・食事・美容・FP・Discord）はこのスナップショットを前提に回答するため、生活全体を踏まえた提案になります。欠測・古い値は null / フラグとして渡し、推測で埋めません。
-- **通知** (`worker/core/notify.ts`): アプリ内ベル・端末プッシュ・Discord の 3 経路。種類別 ON/OFF、永続キュー、再試行、期限、重複防止（FX 約定は長期限・多回数）。
+- **通知** (`worker/core/notify.ts`, `worker/core/push.ts`): アプリ内ベル（常にすべて記録）と端末プッシュ。プッシュはモジュール単位の ON/OFF（必要なら種類ごと、`shared/notifications.ts`）、端末ごとの登録、永続キュー、再試行、期限、重複防止（FX 約定は長期限・多回数）。届かなくなった端末（404/410）は自動で削除。
 - **設定** (`settings` テーブル): 地域、通知、予算、FX 設定などを JSON で保持。
 
 ## 技術選定と理由
@@ -48,8 +48,8 @@ life-os/
 | スタイル | **Tailwind CSS v4 + CSS 変数トークン** | `--ui-font-scale` / `--ui-space-scale` / `--ui-radius-scale` から全サイズを派生。設定画面のスライダーで文字サイズ・余白・角丸を一括調整。Apple HIG のセマンティックカラーを light/dark で定義 |
 | アニメーション | **motion**（Framer Motion の後継） | レイアウトアニメーション（サイドバー、セグメント）、入場スタッガー、モーダル、トーストを宣言的に。`prefers-reduced-motion` と設定で抑制可 |
 | チャート | recharts（推移）・lightweight-charts（FX ローソク足） | 資産・カード推移は recharts で十分。FX はローソク足・マーカー・欠損詰めが必要なので TradingView 製の lightweight-charts |
-| 通知 | **Web Push（VAPID、`@block65/webcrypto-web-push`）** + Discord REST | Workers の WebCrypto で動く Push ライブラリ。Service Worker は通知専用で認証済みデータをキャッシュしない |
-| Discord | **Interactions（HTTP）+ スラッシュコマンド** | Workers は Gateway の常時接続を保持できないため HTTP 型 BOT。`/chat` が自然文入口。通知は Bot token で DM 送信 |
+| 通知 | **Web Push（VAPID、`@block65/webcrypto-web-push`）** | WebCrypto だけで aes128gcm 暗号化（RFC 8291）と VAPID 署名を行うため、Node（自前サーバー）でも Workers でも同じに動く。Service Worker は通知専用で認証済みデータをキャッシュしない |
+| Discord | **停止中**（2026-10-24〜） | `DISCORD_ENABLED=1` のときだけ Interactions エンドポイントと `/api/discord/*` が動く。未設定なら 404 |
 | バリデーション | zod v4 | API 入力を全て検証 |
 | テスト | **Vitest**（純粋ロジック）+ **Playwright**（実ブラウザ） | 1RM、気圧判定、カード目安、FX 計算などは単体で固定。画面はデスクトップ/モバイル両方で実際に操作 |
 | 天気 | Open-Meteo | 旧版と同じ。無料・鍵不要・海面気圧の時系列が取れる |
@@ -105,7 +105,7 @@ npm run db:migrate:remote
 npx wrangler secret put SESSION_SECRET --env production
 npx wrangler secret put GOOGLE_CLIENT_ID --env production
 npx wrangler secret put GOOGLE_CLIENT_SECRET --env production
-# 任意: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT, DISCORD_*, OURA_ACCESS_TOKEN, FREEE_*, BACKUP_INGEST_TOKEN, FX_CONNECTOR_TOKEN
+# 任意: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT, OURA_ACCESS_TOKEN, FREEE_*, BACKUP_INGEST_TOKEN, FX_CONNECTOR_TOKEN
 npm run deploy
 ```
 
