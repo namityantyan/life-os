@@ -40,14 +40,16 @@ export const FOOD_ALIASES: Record<string, string[]> = {
   "りんご": ["07148"], "みかん": ["07027"], "アボカド": ["07006"], "トマト": ["06182"], "キャベツ": ["06061"], "ブロッコリー": ["06263"],
   "さつまいも": ["02006"], "じゃがいも": ["02017"], "くるみ": ["05014"], "きな粉": ["04029"], "きなこ": ["04029"],
   "サラダチキン": ["11220"], "焼き鮭": ["10136"], "焼鮭": ["10136"], "塩鮭": ["10139"], "鶏胸": ["11220"], "鶏むね焼き": ["11288"],
+  "ナッツ": ["05040", "05014", "05005", "05031"], "ミックスナッツ": ["05040", "05014", "05005", "05031"], "素焼きナッツ": ["05040", "05014"],
+  "アーモンド": ["05040", "05001"], "素焼きアーモンド": ["05040"], "ヨーグルト": ["13025", "13053"], "無糖ヨーグルト": ["13025"],
   "豚汁": ["18028"], "とん汁": ["18028"], "唐揚げ": ["18054"], "から揚げ": ["18054"], "からあげ": ["18054"], "肉じゃが": ["18036"],
 };
-/** Exact alias, else the longest alias contained in the query ("鶏むね肉のソテー" → 鶏むね肉). */
+/** Exact alias, else the longest alias the query starts with ("鶏むね肉のソテー" → 鶏むね肉; "カシューナッツ" is not "ナッツ"). */
 function aliasHits(q: string): string[] {
   const t = q.normalize("NFKC").trim(); const c = t.replace(/\s/g, "");
   if (FOOD_ALIASES[t]) return FOOD_ALIASES[t]!;
   if (FOOD_ALIASES[c]) return FOOD_ALIASES[c]!;
-  const keys = Object.keys(FOOD_ALIASES).filter((k) => k.length >= 2 && c.includes(k)).sort((a, b) => b.length - a.length);
+  const keys = Object.keys(FOOD_ALIASES).filter((k) => k.length >= 2 && c.startsWith(k)).sort((a, b) => b.length - a.length);
   return keys.length ? FOOD_ALIASES[keys[0]!]! : [];
 }
 const COOKING = /\s(生|ゆで|焼き|水煮|蒸し|いり|油いため|素揚げ|天ぷら|から揚げ|フライ|ソテー)$/;
@@ -58,6 +60,14 @@ function siblings(f: TableFood): TableFood[] {
   return FOODS.filter((x) => x.n !== f.n && x.name.startsWith(base + " ") && COOKING.test(x.name)).slice(0, 6);
 }
 
+/** Seasoned / fried / sweetened forms: only when the query asks for them. */
+const PROCESSED = /(味付け|ふらい|フライ|加糖|揚げ|天ぷら|甘露煮|砂糖漬)/;
+/** Same food, other kinds ("こめ [水稲めし] 精白米" → 玄米, 発芽玄米 …): offered as alternatives to an alias hit. */
+function family(f: TableFood): TableFood[] {
+  const head = f.name.split(" ").slice(0, 2).join(" ");
+  if (head === f.name) return [];
+  return FOODS.filter((x) => x.n !== f.n && x.name.startsWith(head + " ")).slice(0, 6);
+}
 const bigrams = (s: string) => { const out = new Set<string>(); for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2)); return out; };
 
 /** Ranked text search over the table. Raw/plain forms rank above processed ones on ties. */
@@ -78,14 +88,16 @@ export function searchFoodTable(query: string, limit = 20): { food: TableFood; s
     if (qb.size) { const nb = bigrams(compact); let inter = 0; for (const b of qb) if (nb.has(b)) inter++; score += (2 * inter / (qb.size + nb.size)) * 40; }
     if (score < 12) continue;
     if (/\s生$|^.*\s生\s/.test(norm + " ")) score += 2;        // prefer raw on ties
+    if (PROCESSED.test(norm) && !PROCESSED.test(q)) score -= 8;  // "ナッツ" should not land on a salted, fried one
     score -= Math.min(norm.length, 40) * 0.05;                 // prefer shorter, more generic names
     scored.push({ food: f, score });
   }
   const ranked = scored.sort((a, b) => b.score - a.score);
   const aliasFoods = aliasHits(query).map((n) => BY_NUMBER.get(n)).filter((f): f is TableFood => Boolean(f));
-  const aliased = [...aliasFoods.map((food) => ({ food, score: 200 })), ...aliasFoods.flatMap(siblings).map((food) => ({ food, score: 150 }))];
-  const seen = new Set(aliased.map((a) => a.food.n));
-  return [...aliased, ...ranked.filter((r) => !seen.has(r.food.n))].slice(0, limit);
+  const aliased = [...aliasFoods.map((food) => ({ food, score: 200 })), ...aliasFoods.flatMap(siblings).map((food) => ({ food, score: 150 })), ...aliasFoods.flatMap(family).map((food) => ({ food, score: 140 }))];
+  const seen = new Set<string>();
+  const head = aliased.filter((a) => (seen.has(a.food.n) ? false : (seen.add(a.food.n), true)));
+  return [...head, ...ranked.filter((r) => !seen.has(r.food.n))].slice(0, limit);
 }
 
 export const getTableFood = (number: string) => BY_NUMBER.get(number) ?? null;
@@ -103,7 +115,11 @@ export function nutritionFor(food: TableFood, grams: number): Nutrition {
 
 const GRAM_UNITS = new Set(["g", "ｇ", "グラム", "ml", "mL", "ミリリットル", "cc"]);
 export type TableMatch = { number: string; name: string; grams: number; grams_estimated: boolean; nutrition: Nutrition };
-export type LookupResult = { match: TableMatch | null; candidates: { number: string; name: string }[]; method: "ai" | "text" | "none"; note?: string };
+export type Candidate = { number: string; name: string; per100g: Partial<Record<NutrientKey, number>> };
+export type LookupResult = { match: TableMatch | null; candidates: Candidate[]; method: "ai" | "text" | "none"; note?: string };
+export const candidateOf = (f: TableFood): Candidate => ({ number: f.n, name: f.name, per100g: f.per100g });
+/** AI lookups are optional help: bounded so a slow model never holds a request for long. */
+export const LOOKUP_TIMEOUT_MS = 15_000;
 
 /**
  * Resolve a food the user typed ("ゆで卵", 2, "個") to a table food + edible grams.
@@ -131,12 +147,12 @@ export async function lookupFood(env: Env, input: { name: string; amount?: numbe
       "あなたは管理栄養士です。利用者が食べたものを、日本食品標準成分表の食品の中から最も近い1つに対応付け、可食部の重さ(g)を見積もります。JSONのみで返します。",
       '形式: {"number": "候補の食品番号（5桁の文字列）" | null, "grams": 可食部のグラム数 | null, "keywords": [候補に合うものが無いときに成分表を探し直す検索語]}',
       "number は必ず候補一覧の中から選ぶ。食材そのものが同じものだけを選び、名前が似ているだけの別の食品（サラダチキン→サラダ菜 など）は絶対に選ばない。",
-      "調理法（生・ゆで・焼き）や部位を合わせる。料理名なら主な食材の調理後の形を選ぶ（鶏むね肉のソテー→むね 皮なし 焼き、焼き鮭→しろさけ 焼き）。",
+      "調理法や味付けが書かれていなければ、味付け・揚げ物・加糖ではない基本の形（生・いり 無塩・無糖など）を選ぶ（ナッツ→アーモンド いり 無塩）。調理法（生・ゆで・焼き）や部位を合わせる。料理名なら主な食材の調理後の形を選ぶ（鶏むね肉のソテー→むね 皮なし 焼き、焼き鮭→しろさけ 焼き）。",
       "候補に同じ食材が無いときは null にし、keywords に成分表の書き方の検索語を2〜3個入れる（例: ゆで卵→「鶏卵 ゆで」、ごはん→「こめ めし 精白米」）。市販の加工品・サプリ・プロテインは null。",
       "grams は可食部の重さ。目安: 卵1個50g、ゆで卵1個50g、納豆1パック45g、ごはん茶碗1杯150g、食パン6枚切り1枚60g、バナナ1本(皮なし)100g、りんご1個(皮なし)250g、みかん1個80g、牛乳コップ1杯200g、豆腐1丁300g、鮭1切れ80g、鶏むね肉1枚250g、サラダチキン1個110g、アーモンド1粒1g、ナッツ1つかみ25g、味噌汁1杯の味噌15g。量が無いときは一般的な1食分。",
     ].join("\n") },
     { role: "user", content: `食べたもの: ${name}\n量: ${input.amount ?? "不明"} ${unit || ""}\n候補(番号: 名前):\n${list.map((f) => `${f.n}: ${f.name}`).join("\n") || "(なし)"}` },
-  ], { number: null, grams: null, keywords: [] });
+  ], { number: null, grams: null, keywords: [] }, { timeoutMs: LOOKUP_TIMEOUT_MS, maxTokens: 300 });
 
   let r = await ask(cands);
   let method: LookupResult["method"] = r.provider === "fallback" ? "text" : "ai";
@@ -145,7 +161,7 @@ export async function lookupFood(env: Env, input: { name: string; amount?: numbe
     for (const kw of r.data.keywords.slice(0, 3)) for (const x of searchFoodTable(String(kw), 12)) if (!seen.has(x.food.n)) { seen.add(x.food.n); more.push(x.food); }
     if (more.length) { cands = more.slice(0, 25); const r2 = await ask(cands); if (r2.provider !== "fallback") r = r2; }
   }
-  const candidates = cands.slice(0, 12).map((f) => ({ number: f.n, name: f.name }));
+  const candidates = cands.slice(0, 12).map(candidateOf);
 
   let picked: TableFood | null = null; let grams: number | null = gramsGiven; let estimated = false;
   const chosen = num(r.data.number);
@@ -159,6 +175,6 @@ export async function lookupFood(env: Env, input: { name: string; amount?: numbe
     if (top && top.score >= 60) picked = top.food; // exact / alias / all-token hit
   }
   if (!picked) return { match: null, candidates, method, note: method === "ai" ? "成分表に近い食品が見つかりませんでした" : "AIに接続できないため候補から選んでください" };
-  if (grams == null) return { match: null, candidates: [{ number: picked.n, name: picked.name }, ...candidates.filter((c) => c.number !== picked!.n)], method, note: "量(g)を入れると計算できます" };
+  if (grams == null) return { match: null, candidates: [candidateOf(picked), ...candidates.filter((c) => c.number !== picked!.n)], method, note: "量(g)を入れると計算できます" };
   return { match: { number: picked.n, name: picked.name, grams, grams_estimated: estimated, nutrition: nutritionFor(picked, grams) }, candidates, method };
 }

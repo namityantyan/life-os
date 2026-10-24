@@ -8,9 +8,8 @@ import { adviseWithContext, buildLifeContext, suggestAction } from "../../core/c
 import { weatherCached } from "../../core/weather";
 import { backgroundOf } from "../../core/background";
 import { syncOura } from "./oura";
-import { mealRoutes, dayLog } from "./meals";
-import { lookupFood } from "./food-table";
-import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, withPfcEnergy, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
+import { mealRoutes, mealChatContext, getTargets, putTargets } from "./meals";
+import { NUTRIENT_KEYS, computePersonalThreshold, parseNutrition, normalizeMealProposal, type Nutrition } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -63,136 +62,12 @@ routes.post("/oura/sync", async (c) => {
   catch (e) { return c.json({ ok: false, error: String((e as Error)?.message ?? e) }, 502); }
 });
 
-/* ---------- Meals: daily log, saved foods, sets (meals.ts) ---------- */
+/* ---------- Meals: daily log, saved foods, sets, 成分表, chat proposals (meals.ts) ---------- */
 routes.route("/meals", mealRoutes);
 
-/* ---------- Meals: legacy routine rows (now set members) ---------- */
-const SLOTS = ["breakfast", "lunch", "dinner", "snack"] as const;
-const mealBody = z.object({
-  slot: z.enum(SLOTS), food_name: z.string().min(1).max(120), amount: z.number().nullable().optional(), unit: z.string().max(20).nullable().optional(),
-  nutrition: nutritionSchema.nullable().optional(), cost_per_serving: z.number().min(0).nullable().optional(), sort_order: z.number().int().optional(),
-});
-type MealRow = { id: string; slot: string; food_name: string; amount: number | null; unit: string | null; nutrition_json: string | null; nutrition_source: string | null; cost_per_serving: number | null; sort_order: number; updated_at: string };
-const mealOut = (m: MealRow) => ({ ...m, nutrition: parseNutrition(m.nutrition_json) });
-
-/** Today's eaten log (not the saved sets) is what the AI and the summary endpoints report on. */
-async function mealSummary(env: Env, userId: string) {
-  const { summary } = await dayLog(env, userId, jstDate());
-  return summary;
-}
-routes.get("/meals/summary", async (c) => c.json(await mealSummary(c.env, c.get("user").id)));
-
-/** Estimate the nutrition of a logged entry or a saved food with the AI. Recorded values need `confirm`. */
-type Estimable = { id: string; name: string; amount: number | null; unit: string | null; nutrition_source: string | null };
-async function loadEstimable(env: Env, userId: string, kind: "entry" | "food", id: string): Promise<Estimable | null> {
-  if (kind === "food") {
-    const f = await one<{ id: string; name: string; amount: number | null; unit: string | null; nutrition_source: string | null }>(env.DB, "SELECT id,name,amount,unit,nutrition_source FROM meal_foods WHERE id=? AND user_id=?", id, userId);
-    return f ?? null;
-  }
-  const e = await one<{ id: string; food_name: string; amount: number | null; unit: string | null; nutrition_source: string | null }>(env.DB, "SELECT id,food_name,amount,unit,nutrition_source FROM meal_entries WHERE id=? AND user_id=?", id, userId);
-  return e ? { id: e.id, name: e.food_name, amount: e.amount, unit: e.unit, nutrition_source: e.nutrition_source } : null;
-}
-async function estimateNutrition(env: Env, target: Estimable) {
-  const prompt = `次の食品1回分の栄養を日本食品標準成分表の知識で推定し、JSONのみで返してください。キーは ${NUTRIENT_KEYS.join(", ")}。不明なキーは省略。値は数値のみ。\n食品: ${target.name}${target.amount != null ? ` ${target.amount}${target.unit ?? ""}` : ""}`;
-  const r = await chatJson<Record<string, unknown>>(env, [{ role: "system", content: "あなたは管理栄養士です。JSONオブジェクトのみを出力します。" }, { role: "user", content: prompt }], {});
-  return { estimate: parseNutrition(JSON.stringify(r.data)), provider: r.provider };
-}
-routes.post("/meals/:kind/:id/estimate", async (c) => {
-  const user = c.get("user");
-  const kind = z.enum(["entry", "food"]).parse(c.req.param("kind"));
-  const id = c.req.param("id");
-  const b = z.object({ confirm: z.boolean().optional(), apply: z.boolean().optional(), nutrition: nutritionSchema }).parse(await c.req.json().catch(() => ({})));
-  const cur = await loadEstimable(c.env, user.id, kind, id);
-  if (!cur) return c.json({ error: "not found" }, 404);
-  let est: Nutrition | null = null, provider = "given";
-  if (b.nutrition && Object.keys(b.nutrition).length) est = b.nutrition as Nutrition;
-  else { const r = await estimateNutrition(c.env, cur); est = r.estimate; provider = r.provider; }
-  if (!est) return c.json({ applied: false, reason: "ai_unavailable", estimate: null, provider });
-  if (cur.nutrition_source === "recorded" && !b.confirm) return c.json({ applied: false, reason: "recorded", estimate: est, provider });
-  if (b.apply === false) return c.json({ applied: false, reason: "preview", estimate: est, provider });
-  const table = kind === "food" ? "meal_foods" : "meal_entries";
-  await run(c.env.DB, `UPDATE ${table} SET nutrition_json=?, nutrition_source='estimated', updated_at=datetime('now') WHERE id=? AND user_id=?`, JSON.stringify(est), id, user.id);
-  return c.json({ applied: true, estimate: est, provider });
-});
-
 /* ---------- Nutrition targets ---------- */
-routes.get("/targets", async (c) => c.json({ targets: await getSetting(c.env, c.get("user").id, "nutrition_targets", {}) }));
-routes.put("/targets", async (c) => {
-  const user = c.get("user");
-  const t = withPfcEnergy(nutritionSchema.parse(await c.req.json()), true);
-  await setSetting(c.env, user.id, "nutrition_targets", t);
-  return c.json({ targets: t });
-});
-
-/* ---------- Apply a meal chat proposal (today's log + targets) ---------- */
-const nutritionLoose = z.record(z.string(), z.number()).nullable().optional();
-const logOpZ = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("add"), food_name: z.string().min(1).max(120), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost: z.number().min(0).nullable().optional(), nutrition: nutritionLoose, save_as_food: z.boolean().optional() }),
-  z.object({ op: z.literal("update"), id: z.string().min(1), food_name: z.string().optional(), changes: z.object({ food_name: z.string().min(1).max(120).optional(), amount: z.number().positive().nullable().optional(), unit: z.string().max(20).nullable().optional(), cost: z.number().min(0).nullable().optional(), nutrition: nutritionLoose }) }),
-  z.object({ op: z.literal("remove"), id: z.string().min(1), food_name: z.string().optional() }),
-]);
-routes.post("/meals/apply-proposal", async (c) => {
-  const user = c.get("user");
-  const b = z.object({ message_id: z.string().optional(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), entries: z.array(logOpZ).max(12).default([]), targets: nutritionLoose }).parse(await c.req.json());
-  const day = b.day ?? jstDate();
-  // Re-validate against the log as it is now (the proposal may be old).
-  const existing = (await all<{ id: string; food_name: string; amount: number | null; nutrition_json: string | null; nutrition_source: string | null; cost: number | null }>(
-    c.env.DB, "SELECT id,food_name,amount,nutrition_json,nutrition_source,cost FROM meal_entries WHERE user_id=? AND day=?", user.id, day));
-  const norm = normalizeMealProposal({ entries: b.entries, targets: b.targets ?? null }, existing.map((m) => ({ id: m.id, food_name: m.food_name, amount: m.amount, nutrition: parseNutrition(m.nutrition_json) })));
-  const stmts: D1PreparedStatement[] = [];
-  const done = { added: 0, updated: 0, removed: 0, targets: false, skipped: b.entries.length - norm.entries.length };
-  let order = (await one<{ n: number }>(c.env.DB, "SELECT COALESCE(MAX(sort_order),-1)+1 n FROM meal_entries WHERE user_id=? AND day=?", user.id, day))?.n ?? 0;
-  for (const op of norm.entries) {
-    if (op.op === "add") {
-      // Prefer 成分表 values over the AI's guess; fall back to the guess (marked estimated).
-      const t = await lookupFood(c.env, { name: op.food_name, amount: op.amount, unit: op.unit }).catch(() => null);
-      const nutrition = t?.match?.nutrition ?? (op.nutrition && Object.keys(op.nutrition).length ? op.nutrition : null);
-      const source = t?.match ? "table" : nutrition ? "estimated" : null;
-      const ref = t?.match ? JSON.stringify({ number: t.match.number, name: t.match.name, grams: t.match.grams, grams_estimated: t.match.grams_estimated }) : null;
-      const hasN = Boolean(nutrition);
-      stmts.push(c.env.DB.prepare("INSERT INTO meal_entries (id,user_id,day,food_name,amount,unit,nutrition_json,nutrition_source,nutrition_ref,cost,servings,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)")
-        .bind(newId(), user.id, day, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(nutrition) : null, source, ref, op.cost, order++));
-      if (op.save_as_food) {
-        const dup = await one<{ id: string }>(c.env.DB, "SELECT id FROM meal_foods WHERE user_id=? AND name=? AND archived_at IS NULL", user.id, op.food_name);
-        stmts.push(dup
-          ? c.env.DB.prepare("UPDATE meal_foods SET use_count=use_count+1, last_used_at=datetime('now') WHERE id=?").bind(dup.id)
-          : c.env.DB.prepare("INSERT INTO meal_foods (id,user_id,name,amount,unit,nutrition_json,nutrition_source,nutrition_ref,cost_per_serving,use_count,last_used_at) VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now'))")
-              .bind(newId(), user.id, op.food_name, op.amount, op.unit, hasN ? JSON.stringify(nutrition) : null, source, ref, op.cost));
-      }
-      done.added++;
-    } else if (op.op === "update") {
-      const cur = existing.find((m) => m.id === op.id)!; const ch = op.changes;
-      let nJson = cur.nutrition_json, src = cur.nutrition_source;
-      if (ch.nutrition) { nJson = JSON.stringify(ch.nutrition); src = "estimated"; }
-      else if (ch.amount != null && cur.amount && parseNutrition(cur.nutrition_json)) {
-        const scaled = scaleNutrition(parseNutrition(cur.nutrition_json), cur.amount, ch.amount);
-        if (scaled) { nJson = JSON.stringify(scaled); src = "estimated"; }
-      }
-      stmts.push(c.env.DB.prepare("UPDATE meal_entries SET food_name=?,amount=?,unit=COALESCE(?,unit),nutrition_json=?,nutrition_source=?,cost=?,updated_at=datetime('now') WHERE id=? AND user_id=?")
-        .bind(ch.food_name ?? cur.food_name, ch.amount === undefined ? cur.amount : ch.amount, ch.unit ?? null, nJson, src, ch.cost === undefined ? cur.cost : ch.cost, op.id, user.id));
-      done.updated++;
-    } else {
-      stmts.push(c.env.DB.prepare("DELETE FROM meal_entries WHERE id=? AND user_id=?").bind(op.id, user.id));
-      done.removed++;
-    }
-  }
-  if (norm.targets) {
-    const cur = await getSetting<Nutrition>(c.env, user.id, "nutrition_targets", {});
-    stmts.push(c.env.DB.prepare("INSERT INTO settings (user_id,key,value_json,updated_at) VALUES (?,'nutrition_targets',?,datetime('now')) ON CONFLICT(user_id,key) DO UPDATE SET value_json=excluded.value_json, updated_at=datetime('now')")
-      .bind(user.id, JSON.stringify(["protein_g", "fat_g", "carbs_g"].some((k) => k in norm.targets!) ? withPfcEnergy({ ...cur, ...norm.targets }, true) : { ...cur, ...norm.targets })));
-    done.targets = true;
-  }
-  if (b.message_id) {
-    const msg = await one<{ meta_json: string | null }>(c.env.DB, "SELECT meta_json FROM chat_messages WHERE id=? AND user_id=? AND channel='meal'", b.message_id, user.id);
-    if (msg) {
-      const meta = (() => { try { return JSON.parse(msg.meta_json ?? "{}"); } catch { return {}; } })();
-      meta.applied = { at: new Date().toISOString(), ...done };
-      stmts.push(c.env.DB.prepare("UPDATE chat_messages SET meta_json=? WHERE id=?").bind(JSON.stringify(meta), b.message_id));
-    }
-  }
-  if (stmts.length) await c.env.DB.batch(stmts);
-  return c.json({ ok: true, ...done, ...(await dayLog(c.env, user.id, day)) });
-});
+routes.get("/targets", async (c) => c.json({ targets: await getTargets(c.env, c.get("user").id) }));
+routes.put("/targets", async (c) => c.json({ targets: await putTargets(c.env, c.get("user").id, nutritionSchema.parse(await c.req.json())) }));
 
 /* ---------- Beauty ---------- */
 const beautyBody = z.object({ name: z.string().min(1).max(120), product: z.string().max(200).nullable().optional(), timing: z.string().max(60).nullable().optional(), purpose: z.string().max(200).nullable().optional() });
@@ -313,8 +188,7 @@ routes.post("/chat/:channel", async (c) => {
 
   let roleText = ROLE_TEXT[ch];
   if (ch === "meal") {
-    const log = await dayLog(c.env, user.id, jstDate());
-    const foods = await all<{ name: string; amount: number | null; unit: string | null }>(c.env.DB, "SELECT name,amount,unit FROM meal_foods WHERE user_id=? AND archived_at IS NULL ORDER BY use_count DESC LIMIT 30", user.id);
+    const { log, foods } = await mealChatContext(c.env, user.id);
     roleText += "\n記録の追加・変更・削除や目標の変更を頼まれたときは、提案内容が返信の下にカードで表示され、利用者がボタンを押すと反映されます。例:「ゆで卵2個（約140kcal・たんぱく質12g）を今日の記録に追加する提案です。下のボタンで反映できます。」";
     roleText += "\nビタミンDは利用者には IU で伝える（データの値は µg、1µg = 40IU）。";
     roleText += `\n今日の記録: ${JSON.stringify(log.entries.map((e) => ({ food_name: e.food_name, amount: e.amount, unit: e.unit, nutrition: e.nutrition })))}\n集計: ${JSON.stringify(log.summary.nutrition.totals)} partial=${log.summary.nutrition.partial}\n目標: ${JSON.stringify(log.summary.targets)}\nよく食べるもの: ${JSON.stringify(foods)}`;

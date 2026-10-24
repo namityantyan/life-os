@@ -269,3 +269,58 @@ export function scaleNutrition(n: Nutrition | null | undefined, from: number | n
   for (const [key, v] of Object.entries(n)) if (typeof v === "number") out[key as NutrientKey] = Math.round(v * k * 10) / 10;
   return out;
 }
+
+/* ---------- Editing an item's nutrition (entries, saved foods, set members) ---------- */
+export type TableRef = { number: string; name: string; grams: number; grams_estimated?: boolean };
+export type StoredNutrition = { nutrition: Nutrition | null; source: string | null; ref: TableRef | null };
+/** What the client asked for. Values are per serving; `undefined` = keep. */
+export type NutritionEdit = {
+  table?: { number: string; grams: number; grams_estimated?: boolean } | null;
+  nutrition?: Nutrition | null;
+  source?: "recorded" | "estimated" | "table" | null;
+  ref?: TableRef | null;
+};
+export type TableCompute = (number: string, grams: number) => { name: string; nutrition: Nutrition } | null;
+const isGrams = (u: string | null | undefined) => !!u && /^(g|ｇ|グラム|ml|mL|cc)$/.test(u.trim());
+const roundN = (n: Nutrition): Nutrition => Object.fromEntries(Object.entries(n).map(([k, v]) => [k, k === "energy_kcal" ? Math.round(v as number) : Math.round((v as number) * 100) / 100])) as Nutrition;
+const times = (n: Nutrition | null, k: number): Nutrition | null => (!n ? null : k === 1 ? n : roundN(Object.fromEntries(Object.entries(n).map(([key, v]) => [key, (v as number) * k])) as Nutrition));
+
+/**
+ * The stored (total) nutrition after an edit. Stored values are per serving × servings.
+ * - an explicit 成分表 food + grams is computed from the table (never trusted from the client)
+ * - typed values are 記録 (or 推定 when they came from the AI); energy follows withPfcEnergy
+ * - otherwise a change of amount rescales: 成分表 values are recomputed for the new grams (stay 成分表),
+ *   anything else is scaled and becomes 推定; a change of servings just multiplies
+ */
+export function planNutritionEdit(
+  cur: { amount: number | null; unit: string | null; servings: number; stored: StoredNutrition },
+  next: { amount: number | null; unit: string | null; servings: number },
+  edit: NutritionEdit, compute: TableCompute,
+): StoredNutrition {
+  const servings = next.servings > 0 ? next.servings : 1;
+  if (edit.table) {
+    const c = compute(edit.table.number, edit.table.grams);
+    if (!c) throw new Error("成分表に無い食品番号です");
+    return { nutrition: times(c.nutrition, servings), source: "table", ref: { number: edit.table.number, name: c.name, grams: edit.table.grams, grams_estimated: Boolean(edit.table.grams_estimated) } };
+  }
+  if (edit.nutrition !== undefined) {
+    const n = edit.nutrition && Object.keys(edit.nutrition).length ? edit.nutrition : null;
+    if (!n) return { nutrition: null, source: null, ref: null };
+    // legacy clients copy table values with their ref
+    if (edit.source === "table" && edit.ref) return { nutrition: times(n, servings), source: "table", ref: edit.ref };
+    return { nutrition: times(withPfcEnergy(n), servings), source: edit.source === "estimated" ? "estimated" : "recorded", ref: null };
+  }
+  const { stored } = cur;
+  if (!stored.nutrition) return { nutrition: null, source: null, ref: null };
+  const per = times(stored.nutrition, 1 / (cur.servings > 0 ? cur.servings : 1))!;
+  const amountChanged = next.amount != null && cur.amount != null && next.amount !== cur.amount;
+  if (amountChanged) {
+    if (stored.source === "table" && stored.ref) {
+      const grams = isGrams(next.unit) ? next.amount! : Math.round(stored.ref.grams * (next.amount! / cur.amount!) * 10) / 10;
+      const c = compute(stored.ref.number, grams);
+      if (c) return { nutrition: times(c.nutrition, servings), source: "table", ref: { ...stored.ref, grams } };
+    }
+    return { nutrition: times(scaleNutrition(per, cur.amount, next.amount), servings), source: "estimated", ref: null };
+  }
+  return { nutrition: times(per, servings), source: stored.source, ref: stored.ref };
+}

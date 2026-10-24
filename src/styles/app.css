@@ -340,6 +340,9 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: 
 * { scrollbar-width: thin; scrollbar-color: var(--fill-strong) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { background: var(--fill-strong); border-radius: 8px; }
+/* Swipeable chip rows: no scrollbar (the cut-off chip already shows there is more). */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 /* Components sit in a layer so Tailwind utilities passed via className still win. */
 @layer components {

@@ -139,7 +139,7 @@ export function Field({ label, children, hint, className }: { label: string; chi
 }
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
-    <button role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={cx("tap focus-ring relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors", checked ? "bg-green" : "bg-fill-strong")}>
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={cx("tap focus-ring relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors", checked ? "bg-green" : "bg-fill-strong")}>
       <motion.span layout transition={quick} className={cx("absolute size-6 rounded-full bg-white shadow", checked ? "left-[calc(100%-1.625rem)]" : "left-0.5")} />
     </button>
   );
@@ -153,7 +153,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
     else if (b.offsetLeft + b.offsetWidth > c.scrollLeft + c.clientWidth) c.scrollLeft = b.offsetLeft + b.offsetWidth - c.clientWidth + 8;
   }, [value]);
   return (
-    <div ref={ref} className={cx("inline-flex max-w-[calc(100vw-2rem)] overflow-x-auto p-0.5 rounded-[var(--radius-md)] bg-fill relative whitespace-nowrap", className)} role="tablist" data-testid={testId}>
+    <div ref={ref} className={cx("no-scrollbar inline-flex max-w-[calc(100vw-2rem)] overflow-x-auto p-0.5 rounded-[var(--radius-md)] bg-fill relative whitespace-nowrap", className)} role="tablist" data-testid={testId}>
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} data-value={o.value} onClick={() => onChange(o.value)} className={cx("tap focus-ring relative z-10 px-3 h-9 md:h-8 rounded-[calc(var(--radius-md)-2px)] text-sm font-medium transition-colors", value === o.value ? "text-label" : "text-label-2 hover:text-label")}>
           {value === o.value && <motion.span layoutId={`seg-${options.map((x) => x.value).join("|")}`} className="absolute inset-0 -z-10 rounded-[calc(var(--radius-md)-2px)] bg-elevated shadow-[var(--shadow-card)]" transition={quick} />}

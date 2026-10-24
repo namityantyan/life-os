@@ -43,7 +43,12 @@ export function useApi<T>(path: string | null, opts: { poll?: number; deps?: unk
     if (!path) return;
     if (!silent) setLoading(true);
     const at = cacheEpoch();
-    try { const d = await api.get<T>(path); cacheSetIfCurrent(path, d, at); if (alive.current) { setDataState(d); setError(null); } }
+    try {
+      const d = await api.get<T>(path); cacheSetIfCurrent(path, d, at);
+      // A mutation landed while this GET was in flight: its answer is older than what the screen shows
+      // (optimistic updates), so keep the screen unless there is nothing to show yet.
+      if (alive.current && (at === cacheEpoch() || !shown.current)) { setDataState(d); setError(null); }
+    }
     catch (e: any) { if (alive.current) setError(e?.message ?? String(e)); }
     finally { if (alive.current) setLoading(false); }
   }, [path]);
