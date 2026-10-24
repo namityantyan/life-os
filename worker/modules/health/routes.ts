@@ -10,7 +10,7 @@ import { backgroundOf } from "../../core/background";
 import { syncOura } from "./oura";
 import { mealRoutes, dayLog } from "./meals";
 import { lookupFood } from "./food-table";
-import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
+import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThreshold, parseNutrition, normalizeMealProposal, withPfcEnergy, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
 
 export const routes = new Hono<AppEnv>();
 
@@ -119,7 +119,7 @@ routes.post("/meals/:kind/:id/estimate", async (c) => {
 routes.get("/targets", async (c) => c.json({ targets: await getSetting(c.env, c.get("user").id, "nutrition_targets", {}) }));
 routes.put("/targets", async (c) => {
   const user = c.get("user");
-  const t = nutritionSchema.parse(await c.req.json());
+  const t = withPfcEnergy(nutritionSchema.parse(await c.req.json()), true);
   await setSetting(c.env, user.id, "nutrition_targets", t);
   return c.json({ targets: t });
 });
@@ -179,7 +179,7 @@ routes.post("/meals/apply-proposal", async (c) => {
   if (norm.targets) {
     const cur = await getSetting<Nutrition>(c.env, user.id, "nutrition_targets", {});
     stmts.push(c.env.DB.prepare("INSERT INTO settings (user_id,key,value_json,updated_at) VALUES (?,'nutrition_targets',?,datetime('now')) ON CONFLICT(user_id,key) DO UPDATE SET value_json=excluded.value_json, updated_at=datetime('now')")
-      .bind(user.id, JSON.stringify({ ...cur, ...norm.targets })));
+      .bind(user.id, JSON.stringify(["protein_g", "fat_g", "carbs_g"].some((k) => k in norm.targets!) ? withPfcEnergy({ ...cur, ...norm.targets }, true) : { ...cur, ...norm.targets })));
     done.targets = true;
   }
   if (b.message_id) {

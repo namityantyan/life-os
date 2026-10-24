@@ -63,3 +63,16 @@ describe("scaleNutrition", () => {
     expect(scaleNutrition({ energy_kcal: 62 }, 100, null)).toBeNull();
   });
 });
+
+describe("energy from PFC", () => {
+  it("all of P/F/C → energy follows them; some → only fills a missing energy", async () => {
+    const { energyFromPfc, withPfcEnergy } = await import("../../worker/modules/health/logic");
+    expect(energyFromPfc({ protein_g: 20, fat_g: 10, carbs_g: 30 })).toBe(290);
+    expect(energyFromPfc({ protein_g: 25 }, true)).toBeNull();
+    expect(withPfcEnergy({ energy_kcal: 999, protein_g: 20, fat_g: 10, carbs_g: 30 })).toEqual({ energy_kcal: 290, protein_g: 20, fat_g: 10, carbs_g: 30 });
+    expect(withPfcEnergy({ energy_kcal: 70, protein_g: 6 })).toEqual({ energy_kcal: 70, protein_g: 6 });
+    expect(withPfcEnergy({ protein_g: 25 })).toEqual({ protein_g: 25, energy_kcal: 100 });
+    expect(withPfcEnergy({ protein_g: 25 }, true)).toEqual({ protein_g: 25 });
+    expect(withPfcEnergy({ energy_kcal: 500 })).toEqual({ energy_kcal: 500 });
+  });
+});

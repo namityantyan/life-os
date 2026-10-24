@@ -205,6 +205,24 @@ function resolveEntry(raw: Record<string, unknown>, existing: ExistingEntry[]): 
  * Validates an AI proposal against today's log. Invalid, unresolvable or no-op items are dropped,
  * so the UI only ever offers changes that can be applied safely. At most 12 operations.
  */
+/** Atwater: energy = 4×protein + 9×fat + 4×carbs (kcal). null when none of P/F/C is given (or, with requireAll, any is missing). */
+export function energyFromPfc(n: Partial<Record<string, number>> | null | undefined, requireAll = false): number | null {
+  if (!n) return null;
+  const v = [n.protein_g, n.fat_g, n.carbs_g];
+  if (requireAll ? v.some((x) => typeof x !== "number") : v.every((x) => typeof x !== "number")) return null;
+  const [p, f, c] = v.map((x) => (typeof x === "number" && Number.isFinite(x) ? x : 0));
+  return Math.round(p * 4 + f * 9 + c * 4);
+}
+/** Typed/AI nutrition: with all of P/F/C, energy follows them; with only some, they fill energy only when it is missing (a label's kcal wins). */
+export function withPfcEnergy<T extends Partial<Record<string, number>> | null | undefined>(n: T, requireAll = false): T {
+  if (!n) return n;
+  const all = energyFromPfc(n, true);
+  if (all != null) return { ...n, energy_kcal: all } as T;
+  if (requireAll || typeof n.energy_kcal === "number") return n;
+  const some = energyFromPfc(n);
+  return some == null ? n : ({ ...n, energy_kcal: some } as T);
+}
+
 export function normalizeMealProposal(raw: unknown, existing: ExistingEntry[]): MealProposal {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const targets = r.targets && typeof r.targets === "object" ? parseNutrition(JSON.stringify(r.targets)) : null;
@@ -222,7 +240,7 @@ export function normalizeMealProposal(raw: unknown, existing: ExistingEntry[]): 
       const amount = mealNum(o.amount, { min: 0.01, max: 100000 });
       const cost = mealNum(o.cost ?? o.cost_per_serving, { min: 0, max: 1e6 });
       ops.push({ op: "add", food_name: food, amount: amount ?? null, unit: text(o.unit, 20), cost: cost ?? null,
-        nutrition: o.nutrition ? parseNutrition(JSON.stringify(o.nutrition)) : null, save_as_food: o.save_as_food !== false });
+        nutrition: o.nutrition ? withPfcEnergy(parseNutrition(JSON.stringify(o.nutrition))) : null, save_as_food: o.save_as_food !== false });
     } else if (kind === "update" || kind === "change" || kind === "変更") {
       const cur = resolveEntry(o, existing); if (!cur || touched.has(cur.id)) continue;
       const src = (o.changes && typeof o.changes === "object" ? o.changes : o) as Record<string, unknown>;
@@ -232,7 +250,7 @@ export function normalizeMealProposal(raw: unknown, existing: ExistingEntry[]): 
       const amount = mealNum(src.amount, { min: 0.01, max: 100000 }); if (amount !== undefined && amount !== (cur.amount ?? null)) changes.amount = amount;
       if (src.unit !== undefined) { const u = text(src.unit, 20); if (u !== null) changes.unit = u; }
       const cost = mealNum(src.cost ?? src.cost_per_serving, { min: 0, max: 1e6 }); if (cost !== undefined) changes.cost = cost;
-      if (src.nutrition && typeof src.nutrition === "object") { const n = parseNutrition(JSON.stringify(src.nutrition)); if (n) changes.nutrition = n; }
+      if (src.nutrition && typeof src.nutrition === "object") { const n = withPfcEnergy(parseNutrition(JSON.stringify(src.nutrition))); if (n) changes.nutrition = n; }
       if (!Object.keys(changes).length) continue;
       touched.add(cur.id); ops.push({ op: "update", id: cur.id, food_name: cur.food_name, changes });
     } else if (kind === "remove" || kind === "delete" || kind === "削除") {

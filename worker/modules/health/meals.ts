@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId, getSetting, jstDate } from "../../core/db";
-import { summarizeNutrition, estimateCost, parseNutrition, scaleNutrition, type Nutrition, type NutrientKey } from "./logic";
+import { summarizeNutrition, estimateCost, parseNutrition, scaleNutrition, withPfcEnergy, type Nutrition, type NutrientKey } from "./logic";
 import { lookupFood, searchFoodTable, getTableFood, nutritionFor, FOOD_TABLE_SOURCE, type TableMatch } from "./food-table";
 
 export const mealRoutes = new Hono<AppEnv>();
@@ -73,7 +73,7 @@ export async function dayLog(env: Env, userId: string, day: string) {
 async function resolveNutrition(env: Env, b: { food_name: string; amount?: number | null; unit?: string | null; nutrition?: Record<string, number> | null; nutrition_source?: string | null; nutrition_ref?: string | null; auto_nutrition?: boolean }) {
   if (b.nutrition && Object.keys(b.nutrition).length) {
     const source = b.nutrition_source ?? "recorded";
-    return { nutrition: b.nutrition as Nutrition, source, ref: source === "table" ? (b.nutrition_ref ?? null) : (null as string | null) };
+    return { nutrition: (source === "table" ? b.nutrition : withPfcEnergy(b.nutrition)) as Nutrition, source, ref: source === "table" ? (b.nutrition_ref ?? null) : (null as string | null) };
   }
   if (b.auto_nutrition === false) return { nutrition: null, source: null, ref: null };
   const r = await lookupFood(env, { name: b.food_name, amount: b.amount ?? null, unit: b.unit ?? null }).catch(() => null);
@@ -240,7 +240,7 @@ mealRoutes.put("/entries/:id", async (c) => {
   const b = entryBody.partial().parse(await c.req.json());
   let nJson = cur.nutrition_json, src = cur.nutrition_source, ref = cur.nutrition_ref ?? null;
   if (b.nutrition !== undefined) {
-    if (b.nutrition && Object.keys(b.nutrition).length) { nJson = JSON.stringify(b.nutrition); src = b.nutrition_source ?? "recorded"; ref = src === "table" ? (b.nutrition_ref ?? null) : null; }
+    if (b.nutrition && Object.keys(b.nutrition).length) { src = b.nutrition_source ?? "recorded"; nJson = JSON.stringify(src === "table" ? b.nutrition : withPfcEnergy(b.nutrition)); ref = src === "table" ? (b.nutrition_ref ?? null) : null; }
     else { nJson = null; src = null; ref = null; }
   } else if (b.amount != null && cur.amount && parseNutrition(cur.nutrition_json)) {
     const scaled = scaleNutrition(parseNutrition(cur.nutrition_json), cur.amount, b.amount);
@@ -301,7 +301,7 @@ mealRoutes.put("/foods/:id", async (c) => {
   let nJson = cur.nutrition_json, src = cur.nutrition_source;
   let ref = cur.nutrition_ref ?? null;
   if (b.nutrition !== undefined) {
-    if (b.nutrition && Object.keys(b.nutrition).length) { nJson = JSON.stringify(b.nutrition); src = b.nutrition_source ?? "recorded"; ref = src === "table" ? (b.nutrition_ref ?? null) : null; }
+    if (b.nutrition && Object.keys(b.nutrition).length) { src = b.nutrition_source ?? "recorded"; nJson = JSON.stringify(src === "table" ? b.nutrition : withPfcEnergy(b.nutrition)); ref = src === "table" ? (b.nutrition_ref ?? null) : null; }
     else { nJson = null; src = null; ref = null; }
   }
   await run(c.env.DB, "UPDATE meal_foods SET name=?, amount=?, unit=?, nutrition_json=?, nutrition_source=?, nutrition_ref=?, cost_per_serving=?, archived_at=?, updated_at=datetime('now') WHERE id=? AND user_id=?",

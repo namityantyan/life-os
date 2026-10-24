@@ -443,15 +443,29 @@ function NutritionFields({ n, setN }: { n: Record<string, string>; setN: (v: Rec
     <details className="rounded-[var(--radius-md)] bg-subtle p-3">
       <summary className="text-sm font-medium cursor-pointer">栄養を手入力（成分表を使わない場合）</summary>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
-        {ALL_NUTRIENTS.map((x) => <Field key={x.key} label={`${x.label} (${x.unit})`}><Input inputMode="decimal" value={n[x.key] ?? ""} onChange={(e) => setN({ ...n, [x.key]: e.target.value })} /></Field>)}
+        {ALL_NUTRIENTS.map((x) => <NutrientInput key={x.key} def={x} n={n} setN={setN} />)}
       </div>
-      <p className="text-xs text-label-3 mt-2">空欄のままなら成分表から計算します。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
+      <p className="text-xs text-label-3 mt-2">エネルギーはたんぱく質・脂質・炭水化物から自動で計算します（4・9・4 kcal/g。一部だけのときはエネルギーが空欄なら計算）。空欄のままなら成分表から計算します。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
     </details>
   );
 }
-const collectNutrition = (n: Record<string, string>): Nutrition => {
+/** Energy from the typed P/F/C (same rule as the server). With requireAll (targets) all three must be set. */
+const pfcEnergy = (n: Record<string, string>, requireAll = false) => {
+  const v = ["protein_g", "fat_g", "carbs_g"].map((k) => numOrNull(n[k] ?? ""));
+  if (requireAll ? v.some((x) => x == null) : v.every((x) => x == null)) return null;
+  const [p, f, c] = v.map((x) => x ?? 0);
+  return Math.round(p * 4 + f * 9 + c * 4);
+};
+function NutrientInput({ def: x, n, setN, requireAll, placeholder }: { def: (typeof ALL_NUTRIENTS)[number]; n: Record<string, string>; setN: (v: Record<string, string>) => void; requireAll?: boolean; placeholder?: string }) {
+  const full = x.key === "energy_kcal" ? pfcEnergy(n, true) : null; // all of P/F/C → energy follows them
+  const partial = x.key === "energy_kcal" && full == null && !requireAll ? pfcEnergy(n) : null; // some → suggested when energy is empty
+  return <Field label={`${x.label} (${x.unit})${full != null ? "・自動" : ""}`}><Input inputMode="decimal" value={full != null ? String(full) : (n[x.key] ?? "")} readOnly={full != null} aria-readonly={full != null} className={full != null ? "opacity-70" : undefined} onChange={(e) => setN({ ...n, [x.key]: e.target.value })} placeholder={partial != null ? `${partial}（自動）` : placeholder} data-testid={`nutrient-${x.key}`} /></Field>;
+}
+const collectNutrition = (n: Record<string, string>, requireAll = false): Nutrition => {
   const out: Nutrition = {};
   for (const [k, v] of Object.entries(n)) { const x = numOrNull(v); if (x != null) out[k] = fromShown(k, x); }
+  const full = pfcEnergy(n, true), some = requireAll ? null : pfcEnergy(n);
+  if (full != null) out.energy_kcal = full; else if (out.energy_kcal == null && some != null) out.energy_kcal = some;
   return out;
 };
 
@@ -576,13 +590,13 @@ function TargetsModal({ open, targets, onClose, onSaved }: { open: boolean; targ
   useEffect(() => { if (open) setT(Object.fromEntries(Object.entries(targets).map(([k, v]) => [k, shownText(k, v)]))); }, [open, targets]);
   const save = async () => {
     setSaving(true);
-    try { await api.put("/health/targets", collectNutrition(t)); toast("目標を保存しました", "success"); onSaved(); }
+    try { await api.put("/health/targets", collectNutrition(t, true)); toast("目標を保存しました", "success"); onSaved(); }
     catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
   };
   return (
     <Modal open={open} onClose={onClose} title="1日の栄養目標" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} loading={saving} data-testid="targets-save">保存</Button></>}>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {ALL_NUTRIENTS.map((x) => <Field key={x.key} label={`${x.label} (${x.unit})`}><Input inputMode="decimal" value={t[x.key] ?? ""} onChange={(e) => setT({ ...t, [x.key]: e.target.value })} placeholder="未設定" /></Field>)}
+        {ALL_NUTRIENTS.map((x) => <NutrientInput key={x.key} def={x} n={t} setN={setT} requireAll placeholder="未設定" />)}
       </div>
     </Modal>
   );
