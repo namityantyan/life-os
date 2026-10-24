@@ -119,6 +119,8 @@ test("meals: add a set and a saved food with one tap; totals follow", async ({ a
   const day = today();
   await page.request.delete(`/api/health/meals/day/${day}`, { headers: ORIGIN });
   const foodName = `単品 ${uniq()}`;
+  // Earlier runs leave saved foods behind; only the first 16 show as chips, so archive old test foods.
+  for (const f of (await (await page.request.get("/api/health/meals/foods")).json()).items ?? []) if (/^(単品|ゆで卵|追加) /.test(f.name)) await page.request.put(`/api/health/meals/foods/${f.id}`, { headers: ORIGIN, data: { archived: true } });
   const food = await (await page.request.post("/api/health/meals/foods", { headers: ORIGIN, data: { name: foodName, amount: 1, unit: "個", nutrition: { energy_kcal: 70, protein_g: 6 }, cost_per_serving: 30 } })).json();
   const set = await (await page.request.post("/api/health/meals/sets", { headers: ORIGIN, data: { name: `セット ${uniq()}` } })).json();
   await page.request.post(`/api/health/meals/sets/${set.item.id}/items`, { headers: ORIGIN, data: { food_id: food.item.id } });
