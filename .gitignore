@@ -20,3 +20,4 @@ hub/hub.env
 hub/data/
 server/dist/
 server/server.env
+.claude/worktrees/
