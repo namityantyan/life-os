@@ -57,8 +57,16 @@ test("images: generate (Cmd/Ctrl+Enter), progress, gallery, detail, delete — m
   await page.getByTestId("images-tile").first().click();
   await expect(page.getByTestId("images-detail")).toBeVisible();
   await expect(page.getByTestId("images-tags")).toHaveText("1girl, solo, flower garden, white dress");
-  await expect(page.getByTestId("images-seed-value")).toHaveText("4242");
+  await expect(page.getByTestId("images-seed-value")).toContainText("4242");
   await expect(page.getByTestId("images-download")).toHaveAttribute("href", "/api/images/files/f1?download=1");
+  // Reuse: the seed goes into the (now locked) seed field, the tags into the prompt.
+  await page.getByTestId("images-use-seed").click();
+  await expect(page.getByTestId("images-seed")).toHaveValue("4242");
+  await expect(page.getByTestId("images-seed-lock")).toBeChecked();
+  await page.getByTestId("images-tile").first().click();
+  await page.getByTestId("images-use-tags").click();
+  await expect(page.getByTestId("images-prompt")).toHaveValue("1girl, solo, flower garden, white dress");
+  await page.getByTestId("images-tile").first().click();
   await page.getByTestId("images-delete").click();
   await expect(page.getByTestId("images-detail")).toHaveCount(0);
   await expect(page.getByTestId("images-tile")).toHaveCount(0);

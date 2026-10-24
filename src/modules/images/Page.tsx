@@ -23,6 +23,9 @@ export default function Page() {
   const [rating, setRating] = useState<ImageRating>("all_ages");
   const [model, setModel] = useState<ImageModel>(loadModel);
   const [seed, setSeed] = useState("");
+  // シード固定: keep the seed between generations (an empty field gets a random seed that then stays).
+  const [seedLock, setSeedLock] = useState(() => { try { return localStorage.getItem("images:seedLock") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("images:seedLock", seedLock ? "1" : "0"); } catch { /* private mode */ } }, [seedLock]);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [jobsOffline, setJobsOffline] = useState(false);
@@ -62,10 +65,13 @@ export default function Page() {
     setBusy(true); setRefusal(null);
     try {
       const body: Record<string, unknown> = { text: t, count: Number(count), rating: model === "photo" ? "all_ages" : rating, model };
-      if (seed.trim()) body.seed = Number(seed);
+      let useSeed = seed.trim();
+      if (!useSeed && seedLock) { useSeed = String(Math.floor(Math.random() * 4294967295)); setSeed(useSeed); }
+      if (useSeed) body.seed = Number(useSeed);
       const r = await api.post<{ item: ImageGeneration }>("/images/generate", body);
       history.setData((d) => ({ items: [r.item, ...(d?.items ?? [])] }));
       setText("");
+      if (!seedLock) setSeed("");
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "生成を始められませんでした";
       if (e instanceof ApiError && e.status === 422) setRefusal(msg);
@@ -126,7 +132,7 @@ export default function Page() {
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">枚数</div><Segmented value={count} onChange={setCount} testId="images-count" options={Array.from({ length: IMAGE_COUNT_MAX }, (_, i) => ({ value: String(i + 1), label: `${i + 1}枚` }))} /></div>
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">モデル</div><Segmented value={model} onChange={setModel} testId="images-model" options={(["anime", "photo"] as const).map((m) => ({ value: m, label: IMAGE_MODEL_LABELS[m], disabled: m === "photo" && online && !photoReady && model !== "photo", title: m === "photo" && online && !photoReady ? PHOTO_MISSING_HINT : undefined }))} /></div>
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">区分</div><Segmented value={model === "photo" ? "all_ages" : rating} onChange={setRating} testId="images-rating" options={(["all_ages", "r18"] as const).map((r) => ({ value: r, label: IMAGE_RATING_LABELS[r], disabled: r === "r18" && model === "photo", title: r === "r18" && model === "photo" ? "実写は全年齢のみです" : undefined }))} /></div>
-            <Field label="シード" className="w-36"><Input value={seed} onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder="ランダム" aria-label="シード" data-testid="images-seed" className="h-9" /></Field>
+            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2 flex items-center justify-between gap-2">シード<label className="flex items-center gap-1.5 cursor-pointer font-normal"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={seedLock} onChange={(e) => setSeedLock(e.target.checked)} data-testid="images-seed-lock" />固定</label></div><Input value={seed} onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder={seedLock ? "固定（最初はランダム）" : "ランダム"} aria-label="シード" data-testid="images-seed" className="h-9 w-44" /></div>
             <div className="flex-1" />
             <div className="flex flex-col items-end gap-1">
               <Button type="submit" variant="primary" loading={busy} disabled={!text.trim() || !online || !seedValid || photoBlocked} data-testid="images-generate">生成</Button>
@@ -178,16 +184,17 @@ export default function Page() {
 
       {online && <HomeMacSetup className="mt-8" />}
 
-      <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile} onReuse={(g) => { setText(g.prompt_text); setModel(asImageModel(g.model)); setRating(asImageModel(g.model) === "photo" ? "all_ages" : g.rating); setSelected(null); taRef.current?.focus(); }} />
+      <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile}
+        onUseSeed={(v) => { setSeed(String(v)); setSeedLock(true); setSelected(null); toast(`シード ${v} を固定しました`); }}
+        onUseTags={(g) => { setText(g.tags); setModel(asImageModel(g.model)); setRefusal(null); setSelected(null); taRef.current?.focus(); }}
+        onReuse={(g) => { setText(g.prompt_text); setModel(asImageModel(g.model)); setRating(asImageModel(g.model) === "photo" ? "all_ages" : g.rating); setSelected(null); taRef.current?.focus(); }} />
     </div>
   );
 }
 
-function ImageModal({ selected, onClose, onDelete, onReuse }: { selected: Selected | null; onClose: () => void; onDelete: (s: Selected) => Promise<void>; onReuse: (g: ImageGeneration) => void }) {
+function ImageModal({ selected, onClose, onDelete, onReuse, onUseSeed, onUseTags }: { selected: Selected | null; onClose: () => void; onDelete: (s: Selected) => Promise<void>; onReuse: (g: ImageGeneration) => void; onUseSeed: (seed: number) => void; onUseTags: (g: ImageGeneration) => void }) {
   const [deleting, setDeleting] = useState(false);
-  const toast = useToast();
   const s = selected;
-  const copy = async (v: string) => { try { await navigator.clipboard.writeText(v); toast("コピーしました"); } catch { toast("コピーできませんでした", "error"); } };
   return (
     <Modal open={Boolean(s)} onClose={onClose} title="画像" wide footer={s && <>
       <Button variant="danger" loading={deleting} onClick={async () => { setDeleting(true); try { await onDelete(s); } finally { setDeleting(false); } }} data-testid="images-delete">削除</Button>
@@ -200,9 +207,9 @@ function ImageModal({ selected, onClose, onDelete, onReuse }: { selected: Select
           <div className="rounded-[var(--radius-lg)] bg-fill overflow-hidden grid place-items-center"><img src={fileUrl(s.file)} alt="" className="max-h-[64dvh] w-auto object-contain" /></div>
           <dl className="space-y-4 text-sm min-w-0">
             <div><dt className="text-xs text-label-2 font-medium">入力</dt><dd className="mt-1 whitespace-pre-wrap break-words">{s.gen.prompt_text}</dd></div>
-            <div><dt className="text-xs text-label-2 font-medium flex items-center justify-between">タグ<button className="text-accent text-xs" onClick={() => copy(s.gen.tags)}>コピー</button></dt><dd className="mt-1 font-mono text-xs leading-relaxed break-words text-label-2 select-all" data-testid="images-tags">{s.gen.tags}</dd></div>
+            <div><dt className="text-xs text-label-2 font-medium flex items-center justify-between">タグ<button type="button" className="text-accent text-xs font-medium focus-ring rounded px-1 -mx-1 min-h-8" onClick={() => onUseTags(s.gen)} data-testid="images-use-tags">プロンプトに入れる</button></dt><dd className="mt-1 font-mono text-xs leading-relaxed break-words text-label-2 select-all" data-testid="images-tags">{s.gen.tags}</dd></div>
             <div className="flex gap-6">
-              <div><dt className="text-xs text-label-2 font-medium">シード</dt><dd className="mt-1 tabular" data-testid="images-seed-value">{s.file.seed ?? "—"}</dd></div>
+              <div><dt className="text-xs text-label-2 font-medium">シード</dt><dd className="mt-1 tabular flex items-center gap-2" data-testid="images-seed-value">{s.file.seed ?? "—"}{s.file.seed != null && <button type="button" className="text-accent text-xs font-medium focus-ring rounded px-1 min-h-8" onClick={() => onUseSeed(s.file.seed!)} data-testid="images-use-seed">このシードを使う</button>}</dd></div>
               <div><dt className="text-xs text-label-2 font-medium">モデル</dt><dd className="mt-1" data-testid="images-model-value">{IMAGE_MODEL_LABELS[asImageModel(s.gen.model)]}</dd></div>
               <div><dt className="text-xs text-label-2 font-medium">区分</dt><dd className="mt-1"><Badge tone={s.gen.rating === "r18" ? "orange" : "neutral"}>{IMAGE_RATING_LABELS[s.gen.rating]}</Badge></dd></div>
             </div>

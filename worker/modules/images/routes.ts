@@ -205,6 +205,7 @@ export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>):
   }
   conv.refuse = aiRefusal(conv.refuse, body.text);
   if (conv.refuse) return { ok: false, status: 422, code: "refused", message: refuseMessage(conv.refuse, conv.reason) };
+  if (looksLikeTags(body.text)) conv.tags = normalizeTags(body.text); // tags typed or reused from a past image are used as-is (the AI still ran the refuse check)
   if (!conv.tags) return { ok: false, status: 422, code: "empty", message: "画像の内容を読み取れませんでした。もう少し具体的に書いてください。" };
   const rating = model === "photo" ? "all_ages" : decideRating(body.rating, conv.rating, body.text);
   const post = guardText(conv.tags, rating, model);
