@@ -54,7 +54,7 @@ serve({
 console.log(`lifeos listening on ${process.env.BIND ?? "127.0.0.1"}:${process.env.PORT ?? 8791}`);
 
 // Cron triggers from wrangler.jsonc, evaluated every minute (UTC), plus KV TTL sweep and a daily SQLite backup.
-const CRONS = ["*/10 * * * *", "0 * * * *", "0 22 * * *"];
+const CRONS = ["* * * * *", "*/10 * * * *", "0 * * * *", "0 22 * * *"];
 let lastMinute = -1;
 setInterval(() => {
   const now = new Date(); const m = Math.floor(now.getTime() / 60000);

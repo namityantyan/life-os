@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId } from "../../core/db";
 import { chatJson } from "../../core/ai";
+import { notify } from "../../core/notify";
 import { IMAGE_COUNT_MAX, IMAGE_RATINGS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
 import { IMAGE_SYSTEM_PROMPT, SAFE_NAME, clampCount, decideRating, guardText, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError } from "./logic";
 
@@ -105,7 +106,7 @@ export async function refreshGeneration(env: Env, g: GenRow): Promise<boolean> {
   if (!j?.status) return false;
   if (j.status === "queued") return true;
   if (j.status === "running") { if (typeof j.done === "number" && j.done !== g.progress_done) await setGen(env, g.id, { status: "running", progress_done: j.done, queue_position: null }); else if (g.status !== "running") await setGen(env, g.id, { status: "running", queue_position: null }); return true; }
-  if (j.status === "error") { await setGen(env, g.id, { status: "error", error: (j.message || "生成に失敗しました。").slice(0, 500) }); return true; }
+  if (j.status === "error") { await setGen(env, g.id, { status: "error", error: (j.message || "生成に失敗しました。").slice(0, 500) }); await notifyResult(env, g, 0); return true; }
   if (j.status !== "done") return true;
 
   const workId = String(j.work_id ?? "");
@@ -130,8 +131,12 @@ export async function refreshGeneration(env: Env, g: GenRow): Promise<boolean> {
   await setGen(env, g.id, n > 0
     ? { status: "done", work_id: workId, progress_done: n, queue_position: null, error: null }
     : { status: "error", work_id: workId, error: "画像を受け取れませんでした。" });
+  await notifyResult(env, g, n);
   return true;
 }
+
+const notifyResult = (env: Env, g: GenRow, n: number) =>
+  notify(env, g.user_id, { kind: "images", title: n > 0 ? `画像を${n}枚生成しました` : "画像を生成できませんでした", body: g.prompt_text.slice(0, 80), url: "/images", dedupeKey: `images:${g.id}` }).catch(() => null);
 
 /** Cron (every 10 min): finish jobs whose page was closed, so their images are saved before the service forgets them (1 h). */
 export async function syncPendingImages(env: Env) {
