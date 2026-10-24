@@ -32,8 +32,8 @@ export function setupMarkFor(signal: SignalLike | null, now: Date | number | str
   if (closeMs == null || nowMs - closeMs > SIGNAL_STALE_MS[signal.rule]) return { kind: "stale", label: "更新待ち", side: null, bar_time: signal.bar_time, reason: "bar_too_old" };
   if (bar != null && bar - nowMs > 5 * 60_000) return { kind: "stale", label: "更新待ち", side: null, bar_time: signal.bar_time, reason: "bar_in_future" };
   const side = signal.side;
-  if (signal.stage === "entry" && side) return { kind: side === "BUY" ? "entry_buy" : "entry_sell", label: `◆ 条件成立 · ${side}`, side, bar_time: signal.bar_time, reason: null };
-  if (signal.stage === "setup" && side) return { kind: side === "BUY" ? "ready_buy" : "ready_sell", label: `✓ 準備OK · ${side}`, side, bar_time: signal.bar_time, reason: null };
+  if (signal.stage === "entry" && side) return { kind: side === "BUY" ? "entry_buy" : "entry_sell", label: `条件成立 · ${side}`, side, bar_time: signal.bar_time, reason: null };
+  if (signal.stage === "setup" && side) return { kind: side === "BUY" ? "ready_buy" : "ready_sell", label: `準備OK · ${side}`, side, bar_time: signal.bar_time, reason: null };
   return { kind: "waiting", label: "準備待ち", side: null, bar_time: signal.bar_time, reason: null };
 }
 

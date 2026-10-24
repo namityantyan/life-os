@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children;
     const chunk = isChunkError(error);
     return (
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }} className="max-w-xl mx-auto mt-10" role="alert" data-testid="error-boundary">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }} className="max-w-xl mx-auto mt-10" role="alert" data-testid="error-boundary">
         <div className="card p-6 space-y-4">
           <div>
             <div className="text-xl font-semibold tracking-tight">{chunk ? "アプリが更新されました" : "この画面でエラーが発生しました"}</div>

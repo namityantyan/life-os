@@ -66,7 +66,7 @@ test("heartbeat + setup signal + candles → 準備OK · BUY, chart renders, tra
   expect(q.ok()).toBeTruthy();
 
   await page.goto("/fx");
-  await expect(page.getByTestId("fx-mark-USDJPY-rule_a").locator("[data-mark]")).toHaveText("✓ 準備OK · BUY");
+  await expect(page.getByTestId("fx-mark-USDJPY-rule_a").locator("[data-mark]")).toHaveText("準備OK · BUY");
   await expect(page.getByTestId("fx-mark-USDJPY-rule_a").locator("[data-mark]")).toHaveAttribute("data-mark", "ready_buy");
   await expect(page.getByTestId("fx-pair-USDJPY")).toContainText("150.123 / 150.131");
   // rule disabled by default → label shown

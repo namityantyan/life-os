@@ -71,7 +71,7 @@ export default function Page() {
       {error && !data ? null : groups.length === 0 ? (
         <EmptyState title={archived ? "アーカイブはありません" : debounced ? "該当するメモはありません" : "メモはまだありません"} />
       ) : (
-        <Stagger className="space-y-6" key={query}>
+        <Stagger className="space-y-6">
           {groups.map((g) => (
             <Item key={g.cat}>
               <div className="flex items-center gap-2 px-1 mb-2"><h2 className="text-lg font-semibold tracking-tight">{CAT_LABELS[g.cat]}</h2><span className="text-sm text-label-3 tabular">{g.items.length}</span></div>

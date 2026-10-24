@@ -117,7 +117,7 @@ export function DiscordSettingsCard(): ReactElement | null {
       {data.channels.length > 0 && (
         <div className="text-sm">
           <span className="text-xs text-label-2 font-medium block">会話用チャンネル</span>
-          <ul className="text-xs text-label-2 space-y-0.5">{data.channels.map((ch) => <li key={ch.guild_id}>サーバー <code>{ch.guild_id}</code> → チャンネル <code>{ch.channel_id}</code>（{fmtDateTime(ch.updated_at)}）</li>)}</ul>
+          <ul className="text-xs text-label-2 space-y-0.5">{data.channels.map((ch) => <li key={ch.guild_id}>サーバー <code>{ch.guild_id}</code> のチャンネル <code>{ch.channel_id}</code>（{fmtDateTime(ch.updated_at)}）</li>)}</ul>
         </div>
       )}
 

@@ -1,3 +1,4 @@
+import { Icon } from "@/components/icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -69,8 +70,8 @@ export default function Page() {
     <div>
       <PageHeader title="健康" subtitle={overview.data?.suggestion} />
       <Segmented<Tab> value={tab} onChange={setTab} className="mb-6" options={[{ value: "condition", label: "体調" }, { value: "meal", label: "食事" }, { value: "beauty", label: "美容" }, { value: "checkup", label: "検診" }]} />
-      <AnimatePresence mode="wait">
-        <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
+      <AnimatePresence initial={false}>
+        <motion.div key={tab} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.14 }}>
           {tab === "condition" && <ConditionTab data={overview.data} reload={() => overview.reload(true)} error={overview.error} />}
           {tab === "meal" && <MealTab />}
           {tab === "beauty" && <BeautyTab />}
@@ -185,7 +186,7 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
                       <div className="text-xs text-label-3 tabular">{l.pressure_hpa != null ? `${fmtNum(l.pressure_hpa, 1)} hPa` : "気圧 —"}・3h {fmtDelta(l.delta3h)}・6h {fmtDelta(l.delta6h)}</div>
                     </div>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(l)} aria-label={`${fmtDateTime(l.logged_at)} の記録を編集`}>編集</Button>
-                    <IconButton label={`${fmtDateTime(l.logged_at)} の記録を削除`} className="text-red hover:text-red" onClick={() => del(l)}>✕</IconButton>
+                    <IconButton label={`${fmtDateTime(l.logged_at)} の記録を削除`} className="hover:text-red" onClick={() => del(l)}><Icon name="delete" size={18} /></IconButton>
                   </Item>
                 ))}
               </Stagger>
@@ -253,7 +254,7 @@ function BeautyTab() {
                       <div className="text-xs text-label-2">{[b.product, b.purpose].filter(Boolean).join("・") || "—"}</div>
                     </div>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(b)} aria-label={`${b.name}を編集`}>編集</Button>
-                    <IconButton label={`${b.name}を削除`} className="text-red hover:text-red" onClick={() => del(b)}>✕</IconButton>
+                    <IconButton label={`${b.name}を削除`} className="hover:text-red" onClick={() => del(b)}><Icon name="delete" size={18} /></IconButton>
                   </Item>
                 ))}
               </Stagger>
@@ -346,7 +347,7 @@ function CheckupTab() {
                     <Td className="font-medium sticky left-0 bg-elevated">{c.checkup_date}</Td>
                     {CHECKUP_FIELDS.map((x) => <Td key={x.key} align="right" className={c[x.key] == null ? "text-label-3" : undefined}>{c[x.key] == null ? "—" : fmtNum(c[x.key], x.key === "hba1c" || x.key === "creatinine" || x.key === "uric_acid" ? 1 : 0)}</Td>)}
                     <Td className="text-label-2 max-w-[16rem] truncate">{c.notes ?? "—"}</Td>
-                    <Td className="px-2"><IconButton label={`${fmtDate(c.checkup_date)} の記録を削除`} className="text-red hover:text-red" onClick={() => del(c)}>✕</IconButton></Td>
+                    <Td className="px-2"><IconButton label={`${fmtDate(c.checkup_date)} の記録を削除`} className="hover:text-red" onClick={() => del(c)}><Icon name="delete" size={18} /></IconButton></Td>
                   </tr>
                 ))}
               </tbody>

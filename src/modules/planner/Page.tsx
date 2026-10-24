@@ -1,3 +1,4 @@
+import { Icon } from "@/components/icons";
 import { useCallback, useMemo, useState } from "react";
 import { Button, EmptyState, PageHeader, PageSkeleton, useToast } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -58,9 +59,9 @@ export default function Page() {
       <PageHeader title="スケジュール" subtitle={`${fmtMD(start)} – ${fmtMD(addDays(start, 6))}`}
         actions={<>
           <div className="inline-flex rounded-[var(--radius-md)] bg-fill p-0.5">
-            <Button size="sm" variant="ghost" onClick={() => setStart((s) => addDays(s, -7))} aria-label="前の週" data-testid="prev-week">‹</Button>
+            <Button size="sm" variant="ghost" onClick={() => setStart((s) => addDays(s, -7))} aria-label="前の週" data-testid="prev-week" className="px-2"><Icon name="chevron-left" size={18} /></Button>
             <Button size="sm" variant="ghost" onClick={() => setStart(todayStr())} data-testid="today">今日</Button>
-            <Button size="sm" variant="ghost" onClick={() => setStart((s) => addDays(s, 7))} aria-label="次の週" data-testid="next-week">›</Button>
+            <Button size="sm" variant="ghost" onClick={() => setStart((s) => addDays(s, 7))} aria-label="次の週" data-testid="next-week" className="px-2"><Icon name="chevron-right" size={18} /></Button>
           </div>
           <Button variant="primary" onClick={() => openAdd(null)} data-testid="add-button">追加</Button>
         </>} />

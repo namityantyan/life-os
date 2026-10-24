@@ -153,7 +153,7 @@ function OuraRow({ s, onChanged }: { s: Status; onChanged: () => void }) {
             <Button type="submit" variant="primary" disabled={!token.trim()} loading={busy === "connect"} data-testid="oura-connect">接続</Button>
           </div>
           {error && <p className="text-xs text-red" role="alert" data-testid="oura-error">{error}</p>}
-          <p className="text-xs text-label-3">Oura Cloud（cloud.ouraring.com → Personal Access Tokens）で発行したトークンを貼り付けます。保存前にOura APIで検証し、暗号化して保存します。</p>
+          <p className="text-xs text-label-3">Oura Cloud（cloud.ouraring.com の Personal Access Tokens）で発行したトークンを貼り付けます。保存前にOura APIで検証し、暗号化して保存します。</p>
         </form>
       )}
     </Row>

@@ -1,3 +1,4 @@
+import { Icon } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, useNavigate, useLocation, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
@@ -149,9 +150,9 @@ function ActiveSession({ session, sets, usage, onChange, onFinish }: { session: 
           <ExercisePicker selected={selected} onSelect={setSelected} recentKeys={recentKeys} part={session.part as Part} usage={usage?.exercises} />
         </Section>
 
-        <AnimatePresence mode="wait">
+        <AnimatePresence initial={false}>
           {selected && (
-            <motion.div key={selected.key} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22 }}>
+            <motion.div key={selected.key} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.14 }}>
               <SetForm entry={selected} lastSet={[...sets].reverse().find((s) => s.exercise_key === selected.key) ?? null} onSubmit={addSet} />
             </motion.div>
           )}
@@ -174,7 +175,7 @@ function ActiveSession({ session, sets, usage, onChange, onFinish }: { session: 
                           <span className="font-medium tabular">{describeSet(s)}</span>
                           {s.memo && <span className="text-xs text-label-2 truncate">{s.memo}</span>}
                           <span className="ml-auto text-xs text-label-3 tabular">{fmtDateTime(s.created_at).split(" ")[1]}</span>
-                          <IconButton label={`セット${i + 1}（${describeSet(s)}）を削除`} className="text-red hover:text-red" onClick={() => delSet(s.id)}>✕</IconButton>
+                          <IconButton label={`セット${i + 1}（${describeSet(s)}）を削除`} className="hover:text-red" onClick={() => delSet(s.id)}><Icon name="delete" size={18} /></IconButton>
                         </div>
                       </motion.div>
                     ))}
@@ -214,7 +215,7 @@ function ExercisePicker({ selected, onSelect, recentKeys, part, usage }: { selec
           {chipKeys.map((k) => { const e = getExercise(k); if (!e) return null; return (
             <button key={k} type="button" aria-pressed={selected?.key === k} onClick={() => pick(e)} data-testid={`exercise-chip-${k}`}
               className={cx("pressable focus-ring rounded-full px-3 h-8 text-sm font-medium inline-flex items-center gap-1.5", selected?.key === k ? "bg-accent text-white" : "bg-fill text-label hover:bg-fill-strong")}>
-              {doneToday(k) && <span aria-label="今日記録済み">✓</span>}{e.name}{!doneToday(k) && <LastDone u={usage?.[k]} />}
+              {doneToday(k) && <Icon name="check" size={16} strokeWidth={2.25} title="今日記録済み" />}{e.name}{!doneToday(k) && <LastDone u={usage?.[k]} />}
             </button>
           ); })}
         </div>
@@ -363,7 +364,7 @@ function SessionDetail() {
   const remove = async () => { setDeleting(true); try { await api.del(`/training/sessions/${session.id}`); toast("削除しました"); nav("/training/history"); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); setDeleting(false); } };
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => nav("/training/history")}>‹ 履歴へ戻る</Button></div>
+      <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => nav("/training/history")} className="-ml-2 pl-1.5"><Icon name="chevron-left" size={18} />履歴へ戻る</Button></div>
       <Card>
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div><div className="flex items-center gap-2"><span className="text-2xl font-semibold tracking-tight" data-testid="detail-part">{session.part}</span>{!session.ended_at && <Badge tone="accent">進行中</Badge>}</div>
@@ -408,7 +409,7 @@ function ExerciseHistory() {
   const bySession = new Map<string, (TrainingSet & { started_at: string })[]>(); for (const s of data.sets) { const a = bySession.get(s.session_id) ?? []; a.push(s); bySession.set(s.session_id, a); }
   return (
     <div className="space-y-5">
-      <Button variant="ghost" size="sm" onClick={() => nav(-1)}>‹ 戻る</Button>
+      <Button variant="ghost" size="sm" onClick={() => nav(-1)} className="-ml-2 pl-1.5"><Icon name="chevron-left" size={18} />戻る</Button>
       <Card>
         <div className="text-2xl font-semibold tracking-tight">{data.entry.name}</div>
         <div className="text-sm text-label-2 mt-1">{data.entry.english_name} ・ {data.entry.part} ・ {EQUIPMENT_LABELS[data.entry.equipment]} ・ {UNIT_LABELS[unitFor(data.entry)]}</div>
@@ -490,7 +491,7 @@ function RecordsTab() {
             {items.map((r, i) => {
               const weighted = r.unit === "total" || r.unit === "per_hand" || r.unit === "plate";
               return (
-                <motion.tr key={r.exercise_key} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 20) * 0.03 }} className={cx(trCls, "hover:bg-fill/50 cursor-pointer focus-within:bg-fill/50")} onClick={() => nav(`/training/exercises/${r.exercise_key}`)} data-testid={`record-row-${r.exercise_key}`}>
+                <motion.tr key={r.exercise_key} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, delay: Math.min(i, 8) * 0.03 }} className={cx(trCls, "hover:bg-fill/50 cursor-pointer focus-within:bg-fill/50")} onClick={() => nav(`/training/exercises/${r.exercise_key}`)} data-testid={`record-row-${r.exercise_key}`}>
                   <Td className="pl-5"><button type="button" className="focus-ring rounded-[var(--radius-sm)] text-left font-medium" onClick={(e) => { e.stopPropagation(); nav(`/training/exercises/${r.exercise_key}`); }} aria-label={`${r.name}の履歴を開く`}>{r.name}</button><div className="text-xs text-label-2">{r.unit ? UNIT_LABELS[r.unit] : "単位不明"} ・ {r.set_count}セット</div></Td>
                   <Td align="right" className="font-medium" data-testid="record-weight">{weighted ? fmtWeight(r.best?.weight) : "—"}</Td>
                   <Td align="right">{r.unit === "time" ? `${r.best?.duration_sec ?? "—"}秒` : `${r.best?.reps ?? "—"}回`}</Td>

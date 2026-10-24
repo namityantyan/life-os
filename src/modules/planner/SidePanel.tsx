@@ -1,3 +1,4 @@
+import { Icon } from "@/components/icons";
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Item, Stagger, cx } from "@/components/ui";
@@ -33,7 +34,7 @@ export function SidePanel({ undated, done, onOpen, onUnschedule }: { undated: Pl
         <button onClick={() => setShowDone((v) => !v)} aria-expanded={showDone} data-testid="done-toggle"
           className="focus-ring flex w-full items-center justify-between px-1 text-sm font-semibold text-label-2 hover:text-label">
           <span>完了済み <span className="tabular font-normal text-label-3">{done.length}</span></span>
-          <motion.span animate={{ rotate: showDone ? 90 : 0 }} className="text-label-3 text-xs">▶</motion.span>
+          <motion.span animate={{ rotate: showDone ? 90 : 0 }} transition={{ duration: 0.16 }} className="text-label-3 grid place-items-center"><Icon name="chevron-right" size={14} strokeWidth={2} /></motion.span>
         </button>
         <AnimatePresence initial={false}>
           {showDone && (

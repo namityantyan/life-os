@@ -63,7 +63,7 @@ export default function Page() {
       {error && !data ? null : items.length === 0 ? (
         <EmptyState title={archived ? "アーカイブはありません" : "アイデアはまだありません"} hint={archived ? undefined : "上の欄に書いて保存すると、ここに並びます。"} />
       ) : (
-        <Stagger className="space-y-2" key={query}>
+        <Stagger className="space-y-2">
           <AnimatePresence initial={false}>
             {items.map((it) => (
               <Item key={it.id}>

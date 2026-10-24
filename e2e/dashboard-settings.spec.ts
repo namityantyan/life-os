@@ -42,3 +42,18 @@ test("settings: theme toggle, notification pref toggle persists, weather locatio
   await page.goto("/");
   await expect(page.getByText("天気・気圧")).toBeVisible();
 });
+
+test("settings: design theme switches <html data-design> and persists on the server", async ({ authed: page }) => {
+  await page.goto("/settings");
+  await page.getByTestId("design-material").click();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "material");
+  await expect(page.getByTestId("design-material")).toHaveAttribute("aria-checked", "true");
+  await page.getByTestId("design-glass").click();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "glass");
+  await page.waitForTimeout(300);
+  await page.evaluate(() => localStorage.removeItem("lifeos.ui")); // the server copy must bring it back
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "glass");
+  await page.getByTestId("design-standard").click();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "standard");
+});

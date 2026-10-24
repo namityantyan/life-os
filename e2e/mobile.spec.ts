@@ -31,3 +31,24 @@ test("mobile bottom tab bar navigates and shows the active indicator", async ({ 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   expect(overflow).toBeFalsy();
 });
+
+test("mobile tab bar: その他 opens the drawer; bar contents follow 設定 and persist on the server", async ({ authed: page }) => {
+  await page.getByTestId("tab-more").click();
+  await expect(page.getByTestId("drawer")).toBeVisible();
+  await page.getByTestId("drawer-close").click();
+  await expect(page.getByTestId("drawer")).toHaveCount(0);
+  await page.goto("/settings#tabbar");
+  await page.getByTestId("tabbar-reset").click();
+  await page.getByTestId("tabbar-remove-cards").click();
+  await page.getByTestId("tabbar-add-notes").click();
+  await page.getByTestId("tabbar-up-notes").click();
+  await expect(page.getByTestId("tab-cards")).toHaveCount(0);
+  await page.waitForTimeout(700); // debounced save
+  await page.evaluate(() => localStorage.removeItem("lifeos.tabbar")); // the server copy must bring it back
+  await page.reload();
+  await expect(page.getByTestId("tab-notes")).toBeVisible();
+  const order = await page.getByTestId("tabbar").locator("a[data-testid^='tab-']").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  expect(order).toEqual(["tab-dashboard", "tab-planner", "tab-health", "tab-notes", "tab-training"]);
+  await page.getByTestId("tabbar-reset").click();
+  await page.waitForTimeout(700);
+});

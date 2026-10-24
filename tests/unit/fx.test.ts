@@ -15,14 +15,14 @@ describe("setupMarkFor", () => {
     const sig = { rule: "rule_a" as const, side: "BUY" as const, stage: "setup" as const, bar_time: iso(T0 - 5 * min) };
     expect(setupMarkFor(sig, T0, iso(T0 - 46_000)).label).toBe("更新待ち");
     expect(setupMarkFor(sig, T0, null).label).toBe("更新待ち");
-    expect(setupMarkFor(sig, T0, iso(T0 - 44_000)).label).toBe("✓ 準備OK · BUY");
+    expect(setupMarkFor(sig, T0, iso(T0 - 44_000)).label).toBe("準備OK · BUY");
   });
   it("shows 更新待ち without any signal", () => {
     expect(setupMarkFor(null, T0, seen)).toMatchObject({ kind: "stale", label: "更新待ち", reason: "no_signal" });
   });
   it("maps stages to the spec marks", () => {
-    expect(setupMarkFor({ rule: "rule_a", side: "SELL", stage: "setup", bar_time: iso(T0 - 5 * min) }, T0, seen)).toMatchObject({ kind: "ready_sell", label: "✓ 準備OK · SELL" });
-    expect(setupMarkFor({ rule: "donchian4", side: "BUY", stage: "entry", bar_time: iso(T0 - 5 * min) }, T0, seen)).toMatchObject({ kind: "entry_buy", label: "◆ 条件成立 · BUY" });
+    expect(setupMarkFor({ rule: "rule_a", side: "SELL", stage: "setup", bar_time: iso(T0 - 5 * min) }, T0, seen)).toMatchObject({ kind: "ready_sell", label: "準備OK · SELL" });
+    expect(setupMarkFor({ rule: "donchian4", side: "BUY", stage: "entry", bar_time: iso(T0 - 5 * min) }, T0, seen)).toMatchObject({ kind: "entry_buy", label: "条件成立 · BUY" });
     expect(setupMarkFor({ rule: "donchian6", side: null, stage: "none", bar_time: iso(T0 - 5 * min) }, T0, seen)).toMatchObject({ kind: "waiting", label: "準備待ち" });
   });
   it("clears the highlight when the judgment bar is too old, measured from bar close (A: 90 min after H1 close, donchian: 5 h after H4 close)", () => {
