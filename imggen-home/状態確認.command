@@ -36,7 +36,7 @@ elif [[ -f "$m.part" ]]; then warn "モデル: ダウンロード途中 $(( $(st
 else fail "モデル: ありません（セットアップを再実行してください）"; fi
 info "内蔵ディスクの空き: $(free_gb "$PREFIX")GB"
 pmset -g batt 2>/dev/null | grep -q "AC Power" && ok "電源アダプタ: 接続中" || warn "電源アダプタ: 未接続（バッテリー駆動中はスリープして生成が止まります）"
-pmset -g assertions 2>/dev/null | grep -q caffeinate && ok "スリープ防止: 有効" || warn "スリープ防止: 無効"
+{ pmset -g assertions 2>/dev/null | grep -qi caffeinate || pgrep -xq caffeinate; } && ok "スリープ防止: 有効" || warn "スリープ防止: 無効"
 
 step "最近のサービスログ" ""
 [[ -f "$PREFIX/logs/imggen-svc.log" ]] && tail -n 8 "$PREFIX/logs/imggen-svc.log" | sed 's/^/    /'

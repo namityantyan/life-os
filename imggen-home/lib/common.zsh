@@ -39,11 +39,18 @@ agent_loaded() { [[ -z "${LIFEOS_IMGGEN_NO_LAUNCHD:-}" ]] && launchctl print "$(
 agent_stop() {
   [[ -n "${LIFEOS_IMGGEN_NO_LAUNCHD:-}" ]] && return 0
   launchctl bootout "$(uid_domain)/$1" >/dev/null 2>&1 || launchctl unload "$(plist_path "$1")" >/dev/null 2>&1 || true
+  # bootout returns before a slow process (uvicorn) has exited; re-registering too early fails silently.
+  local i; for i in {1..30}; do agent_loaded "$1" || return 0; sleep 0.5; done
 }
 agent_start() {
   [[ -n "${LIFEOS_IMGGEN_NO_LAUNCHD:-}" ]] && { info "（テストのため launchctl は実行しません: $1）"; return 0; }
   launchctl enable "$(uid_domain)/$1" >/dev/null 2>&1 || true
-  launchctl bootstrap "$(uid_domain)" "$(plist_path "$1")" 2>/dev/null || launchctl load -w "$(plist_path "$1")"
+  local i; for i in {1..10}; do
+    launchctl bootstrap "$(uid_domain)" "$(plist_path "$1")" >/dev/null 2>&1 || launchctl load -w "$(plist_path "$1")" >/dev/null 2>&1 || true
+    agent_loaded "$1" && return 0
+    sleep 1
+  done
+  return 1
 }
 
 config_get() { [[ -f "$PREFIX/config.env" ]] || return 0; ( set -a; source "$PREFIX/config.env" >/dev/null 2>&1; print -r -- "${(P)1:-}" ) }
