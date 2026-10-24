@@ -19,6 +19,7 @@ const pages = {
   fx: lazyPage(() => import("@/modules/fx/Page")),
   finance: lazyPage(() => import("@/modules/finance/Page")),
   royalty: lazyPage(() => import("@/modules/royalty/Page")),
+  images: lazyPage(() => import("@/modules/images/Page")),
   backups: lazyPage(() => import("@/modules/backups/Page")),
   requests: lazyPage(() => import("@/modules/requests/Page")),
   settings: lazyPage(() => import("@/modules/settings/Page")),
@@ -45,6 +46,7 @@ function Gate() {
         <Route path="/fx/*" element={page(<pages.fx />)} />
         <Route path="/finance/*" element={page(<pages.finance />)} />
         <Route path="/royalty/*" element={page(<pages.royalty />)} />
+        <Route path="/images/*" element={page(<pages.images />)} />
         <Route path="/backups/*" element={page(<pages.backups />)} />
         <Route path="/requests/*" element={page(<pages.requests />)} />
         <Route path="/settings/*" element={page(<pages.settings />)} />

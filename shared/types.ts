@@ -19,7 +19,7 @@ export type Notification = {
 
 export type ModuleKey =
   | "dashboard" | "planner" | "ideas" | "notes" | "health" | "training" | "assets" | "cards"
-  | "fx" | "finance" | "royalty" | "backups" | "requests" | "settings";
+  | "fx" | "finance" | "royalty" | "images" | "backups" | "requests" | "settings";
 
 export const MODULES: { key: ModuleKey; path: string; label: string; group: string }[] = [
   { key: "dashboard", path: "/", label: "ダッシュボード", group: "ホーム" },
@@ -33,6 +33,7 @@ export const MODULES: { key: ModuleKey; path: string; label: string; group: stri
   { key: "fx", path: "/fx", label: "FXシグナル", group: "お金・資産" },
   { key: "finance", path: "/finance", label: "お金", group: "お金・資産" },
   { key: "royalty", path: "/royalty", label: "明細", group: "お金・資産" },
+  { key: "images", path: "/images", label: "画像生成", group: "制作" },
   { key: "backups", path: "/backups", label: "バックアップ", group: "その他" },
   { key: "requests", path: "/requests", label: "リクエスト", group: "その他" },
   { key: "settings", path: "/settings", label: "設定", group: "その他" },

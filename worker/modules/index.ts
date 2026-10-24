@@ -24,9 +24,10 @@ import * as integrations from "./integrations/routes";
 import * as data from "./data/routes";
 import * as fxhub from "./fxhub/routes";
 import * as assistant from "./assistant/routes";
+import * as images from "./images/routes";
 
 type Mod = { routes?: Hono<AppEnv>; publicRoutes?: Hono<AppEnv> };
-const modules: Record<string, Mod> = { planner, ideas, notes, health, training, assets, cards, fx, finance, royalty, backups, requests, discord, dashboard, integrations, data, assistant, fxhub };
+const modules: Record<string, Mod> = { planner, ideas, notes, health, training, assets, cards, fx, finance, royalty, backups, requests, discord, dashboard, integrations, data, assistant, images, fxhub };
 
 export function registerModules(app: Hono<AppEnv>) {
   for (const [name, m] of Object.entries(modules)) if (m.routes) app.route(`/${name}`, m.routes);

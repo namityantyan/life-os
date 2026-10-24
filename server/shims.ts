@@ -1,4 +1,6 @@
 // Node replacements for the Cloudflare bindings used by the Worker app.
+import { mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type { D1Shim } from "../hub/d1";
 
 /** KV over SQLite (table _kv) with TTL semantics close to Workers KV. */
@@ -61,4 +63,21 @@ export function cronMatches(expr: string, d: Date): boolean {
     return Number(part) === v;
   });
   return f(mi, d.getUTCMinutes()) && f(h, d.getUTCHours()) && f(dom, d.getUTCDate()) && f(mon, d.getUTCMonth() + 1) && f(dow, d.getUTCDay());
+}
+
+/** Image byte store (画像生成) over a directory. Keys look like "<user>/<generation>/<n>.png"; anything that
+ *  would leave the directory is rejected. Writes go through a temp file + rename so a crash never leaves half a PNG. */
+export function dirImageStore(root: string) {
+  mkdirSync(root, { recursive: true });
+  const pathOf = (key: string) => {
+    if (!/^[A-Za-z0-9._\/-]+$/.test(key) || key.split("/").some((p) => !p || p === "." || p === "..")) throw new Error(`bad image key ${key}`);
+    const p = resolve(root, key);
+    if (!p.startsWith(root + sep)) throw new Error(`bad image key ${key}`);
+    return p;
+  };
+  return {
+    async get(key: string) { const p = pathOf(key); return existsSync(p) ? new Uint8Array(readFileSync(p)) : null; },
+    async put(key: string, bytes: Uint8Array) { const p = pathOf(key); mkdirSync(dirname(p), { recursive: true }); const tmp = join(dirname(p), `.${Date.now()}.tmp`); writeFileSync(tmp, bytes); renameSync(tmp, p); },
+    async delete(key: string) { rmSync(pathOf(key), { force: true }); },
+  };
 }

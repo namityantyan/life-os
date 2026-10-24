@@ -36,6 +36,13 @@ export type Env = {
   AI_RELAY_URL?: string;
   AI_RELAY_SECRET?: string;
   MIGRATION_EXPORT_UNTIL?: string;
+  /** 画像生成: the Mac imggen service (FastAPI) as seen from this server, e.g. http://127.0.0.1:18787 via the
+   *  reverse SSH tunnel, and its bearer token. Both optional; without them the images page shows 未設定. */
+  IMGGEN_URL?: string;
+  IMGGEN_TOKEN?: string;
+  /** Byte store for generated images. The self-hosted server injects a directory-backed store
+   *  (IMGGEN_STORE_DIR); without it images go to the image_blobs table. */
+  IMAGE_STORE?: ImageStore;
   /* Set only inside the hub process: */
   IS_FX_HUB?: string;
   FX_HUB_OWNER_ID?: string;     // Life OS user id that owns the FX data
@@ -44,3 +51,9 @@ export type Env = {
 
 export type Variables = { user: import("../shared/types").User };
 export type AppEnv = { Bindings: Env; Variables: Variables };
+
+export type ImageStore = {
+  get(key: string): Promise<Uint8Array | null>;
+  put(key: string, bytes: Uint8Array): Promise<void>;
+  delete(key: string): Promise<void>;
+};

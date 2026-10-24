@@ -76,6 +76,7 @@ const MODULE_ALIASES: Record<string, ModuleKey> = {
   "fx": "fx", "FX": "fx", "シグナル": "fx", "為替": "fx",
   "お金": "finance", "家計": "finance", "finance": "finance", "money": "finance",
   "明細": "royalty", "著作権": "royalty", "royalty": "royalty",
+  "画像生成": "images", "画像": "images", "images": "images",
   "バックアップ": "backups", "backups": "backups", "backup": "backups",
   "リクエスト": "requests", "要望": "requests", "requests": "requests", "request": "requests",
   "設定": "settings", "settings": "settings", "setting": "settings",

@@ -12,7 +12,7 @@ test("sidebar collapses and all modules navigate", async ({ authed: page }) => {
   await page.getByTestId("sidebar-toggle").click();
   await expect(page.getByTestId("sidebar")).toHaveCSS("width", "64px");
   await page.getByTestId("sidebar-toggle").click();
-  for (const key of ["planner", "ideas", "notes", "health", "training", "assets", "cards", "fx", "finance", "royalty", "backups", "requests", "settings", "dashboard"]) {
+  for (const key of ["planner", "ideas", "notes", "health", "training", "assets", "cards", "fx", "finance", "royalty", "images", "backups", "requests", "settings", "dashboard"]) {
     await page.getByTestId(`nav-${key}`).click();
     await expect(page.getByTestId("page-skeleton")).toHaveCount(0, { timeout: 15000 });
     await expect(page.locator("main")).not.toBeEmpty();
