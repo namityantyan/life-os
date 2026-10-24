@@ -106,14 +106,24 @@ export function computePersonalThreshold(
 }
 
 /* ---------- Oura normalization ---------- */
+/** daily_activity fields kept for activity targets/advice (Oura API v2 PublicDailyActivity). */
+export const OURA_ACTIVITY_FIELDS = [
+  "active_calories", "target_calories", "target_meters", "meters_to_target", "equivalent_walking_distance",
+  "high_activity_time", "medium_activity_time", "low_activity_time", "sedentary_time",
+  "high_activity_met_minutes", "medium_activity_met_minutes", "inactivity_alerts",
+] as const;
+export type OuraActivityField = (typeof OURA_ACTIVITY_FIELDS)[number];
 export type OuraDailyRow = {
   day: string;
   sleep_duration_sec: number | null; sleep_score: number | null; readiness_score: number | null;
   steps: number | null; hrv: number | null; resting_hr: number | null; sleep_balance: number | null;
-};
+  temperature_deviation: number | null;
+  activity_score: number | null;
+  activity_contributors_json: string | null;
+} & Record<OuraActivityField, number | null>;
 type OuraDailySleep = { day: string; score?: number | null };
-type OuraDailyReadiness = { day: string; score?: number | null; contributors?: { sleep_balance?: number | null } | null };
-type OuraDailyActivity = { day: string; steps?: number | null };
+type OuraDailyReadiness = { day: string; score?: number | null; temperature_deviation?: number | null; contributors?: { sleep_balance?: number | null } | null };
+type OuraDailyActivity = { day: string; steps?: number | null; score?: number | null; contributors?: Record<string, unknown> | null } & Partial<Record<OuraActivityField, number | null>>;
 type OuraSleep = { day: string; type?: string; total_sleep_duration?: number | null; average_hrv?: number | null; lowest_heart_rate?: number | null };
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -123,12 +133,26 @@ export function normalizeOura(input: { daily_sleep?: OuraDailySleep[]; daily_rea
   const rows = new Map<string, OuraDailyRow>();
   const get = (day: string) => {
     let r = rows.get(day);
-    if (!r) { r = { day, sleep_duration_sec: null, sleep_score: null, readiness_score: null, steps: null, hrv: null, resting_hr: null, sleep_balance: null }; rows.set(day, r); }
+    if (!r) {
+      r = { day, sleep_duration_sec: null, sleep_score: null, readiness_score: null, steps: null, hrv: null, resting_hr: null, sleep_balance: null,
+        temperature_deviation: null, activity_score: null, activity_contributors_json: null,
+        ...(Object.fromEntries(OURA_ACTIVITY_FIELDS.map((k) => [k, null])) as Record<OuraActivityField, null>) };
+      rows.set(day, r);
+    }
     return r;
   };
   for (const s of input.daily_sleep ?? []) if (s?.day) get(s.day).sleep_score = num(s.score);
-  for (const r of input.daily_readiness ?? []) if (r?.day) { const row = get(r.day); row.readiness_score = num(r.score); row.sleep_balance = num(r.contributors?.sleep_balance); }
-  for (const a of input.daily_activity ?? []) if (a?.day) get(a.day).steps = num(a.steps);
+  for (const r of input.daily_readiness ?? []) if (r?.day) {
+    const row = get(r.day); row.readiness_score = num(r.score); row.sleep_balance = num(r.contributors?.sleep_balance); row.temperature_deviation = num(r.temperature_deviation);
+  }
+  for (const a of input.daily_activity ?? []) if (a?.day) {
+    const row = get(a.day);
+    row.steps = num(a.steps); row.activity_score = num(a.score);
+    for (const k of OURA_ACTIVITY_FIELDS) row[k] = num(a[k]);
+    const c = a.contributors && typeof a.contributors === "object"
+      ? Object.fromEntries(Object.entries(a.contributors).filter(([, v]) => num(v) != null)) : null;
+    row.activity_contributors_json = c && Object.keys(c).length ? JSON.stringify(c) : null;
+  }
   // Sleep sessions: prefer the "long_sleep" session; otherwise the longest one of the day.
   const byDay = new Map<string, OuraSleep[]>();
   for (const s of input.sleep ?? []) if (s?.day) byDay.set(s.day, [...(byDay.get(s.day) ?? []), s]);

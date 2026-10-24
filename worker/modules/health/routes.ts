@@ -62,6 +62,7 @@ routes.get("/overview", async (c) => {
     weather: weather ? { location: weather.location, pressure: weather.pressure, fetched_at: weather.fetched_at, series: weather.pressure_series.slice(-36) } : null,
     weather_configured: Boolean(weather) || Boolean(await getSetting<WeatherLocation | null>(c.env, user.id, "weather_location", null)),
     suggestion: suggestAction(ctx),
+    activity: ctx.health.activity,
     pressure_logs: logs,
     personal,
   });

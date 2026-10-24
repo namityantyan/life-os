@@ -5,7 +5,7 @@ import { buildBriefing, normalizeAction, normalizeActions, actionToRow, fmtDur }
 const ctx = (over: Partial<LifeContext> = {}): LifeContext => ({
   now: "2026-10-21T09:00:00+09:00",
   user: { name: "n" },
-  health: { oura: null, oura_is_today: false, pressure: null, checkup_latest: null, meal_summary: null, beauty_routine_count: 0 },
+  health: { oura: null, oura_is_today: false, pressure: null, checkup_latest: null, meal_summary: null, beauty_routine_count: 0, activity: null },
   training: { trained_today: false, last_session: null, sessions_7d: 0 },
   planner: { tasks_open: 0, events_today: [], reminders_pending: 0 },
   money: { card_month_total: null, card_budget: null, card_budget_left: null, personal_jpy_cash: null, cash_is_fresh: false },
@@ -27,7 +27,7 @@ describe("buildBriefing", () => {
   });
   it("shapes sleep / readiness / budget / pressure chips with tones", () => {
     const b = buildBriefing(ctx({
-      health: { oura: { day: "2026-10-21", sleep_duration_sec: 6 * 3600 + 30 * 60, sleep_score: 62, readiness_score: 65, steps: 100, hrv: null, resting_hr: null, sleep_balance: null }, oura_is_today: true, pressure: { current: 1000, delta3h: -3, delta6h: -5, range12h: 6, level: "caution", direction: "down", missing: false }, checkup_latest: null, meal_summary: null, beauty_routine_count: 0 },
+      health: { oura: { day: "2026-10-21", sleep_duration_sec: 6 * 3600 + 30 * 60, sleep_score: 62, readiness_score: 65, steps: 100, hrv: null, resting_hr: null, sleep_balance: null }, oura_is_today: true, pressure: { current: 1000, delta3h: -3, delta6h: -5, range12h: 6, level: "caution", direction: "down", missing: false }, checkup_latest: null, meal_summary: null, beauty_routine_count: 0, activity: null },
       training: { trained_today: true, last_session: { part: "胸", started_at: "2026-10-21T00:00:00Z" }, sessions_7d: 2 },
       planner: { tasks_open: 7, events_today: [{ title: "打合せ", start_at: "2026-10-21T10:00:00+09:00" }], reminders_pending: 1 },
       money: { card_month_total: 120000, card_budget: 100000, card_budget_left: -20000, personal_jpy_cash: null, cash_is_fresh: false },
@@ -46,7 +46,7 @@ describe("buildBriefing", () => {
     expect(by.pressure.label).toBe("気圧 注意");
   });
   it("marks stale oura values as 前回 and omits unknown pressure", () => {
-    const b = buildBriefing(ctx({ health: { oura: { day: "2026-10-19", sleep_duration_sec: 7 * 3600, sleep_score: 80, readiness_score: null, steps: null, hrv: null, resting_hr: null, sleep_balance: null }, oura_is_today: false, pressure: { current: null, delta3h: null, delta6h: null, range12h: null, level: "unknown", direction: null, missing: true }, checkup_latest: null, meal_summary: null, beauty_routine_count: 0 } }));
+    const b = buildBriefing(ctx({ health: { oura: { day: "2026-10-19", sleep_duration_sec: 7 * 3600, sleep_score: 80, readiness_score: null, steps: null, hrv: null, resting_hr: null, sleep_balance: null }, oura_is_today: false, pressure: { current: null, delta3h: null, delta6h: null, range12h: null, level: "unknown", direction: null, missing: true }, checkup_latest: null, meal_summary: null, beauty_routine_count: 0, activity: null } }));
     expect(b.chips[0].label).toBe("睡眠 7h00m · 80（前回）");
     expect(b.chips.some((c) => c.id === "pressure")).toBe(false);
     expect(b.chips.some((c) => c.id === "readiness")).toBe(false);

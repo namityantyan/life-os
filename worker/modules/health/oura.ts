@@ -1,7 +1,13 @@
 import type { Env } from "../../env";
 import { run } from "../../core/db";
 import { loadToken, saveToken } from "../assets/freee";
-import { normalizeOura } from "./logic";
+import { normalizeOura, OURA_ACTIVITY_FIELDS, type OuraDailyRow } from "./logic";
+
+/** Every stored oura_daily value column (fixed list, never user input → safe to interpolate). */
+const OURA_COLUMNS = [
+  "sleep_duration_sec", "sleep_score", "readiness_score", "steps", "hrv", "resting_hr", "sleep_balance",
+  "temperature_deviation", "activity_score", "activity_contributors_json", ...OURA_ACTIVITY_FIELDS,
+] as const satisfies readonly (keyof OuraDailyRow)[];
 
 const BASE = "https://api.ouraring.com/v2/usercollection";
 
@@ -60,7 +66,9 @@ async function fetchCollection<T>(token: string, name: string, start: string, en
 export async function syncOura(env: Env, userId: string): Promise<{ synced: number; skipped?: "no_token" }> {
   const token = await resolveToken(env, userId);
   if (!token) return { synced: 0, skipped: "no_token" };
-  const end = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  // end_date is treated as exclusive by some v2 collections (daily_activity), so ask through tomorrow
+  // to make sure today's running activity totals are included.
+  const end = new Date(Date.now() + 9 * 3600e3 + 86400e3).toISOString().slice(0, 10);
   const start = new Date(Date.now() + 9 * 3600e3 - 7 * 86400e3).toISOString().slice(0, 10);
   const [daily_sleep, daily_readiness, daily_activity, sleep] = await Promise.all([
     fetchCollection<any>(token, "daily_sleep", start, end),
@@ -70,19 +78,14 @@ export async function syncOura(env: Env, userId: string): Promise<{ synced: numb
   ]);
   const rows = normalizeOura({ daily_sleep, daily_readiness, daily_activity, sleep });
   for (const r of rows) {
+    const vals = OURA_COLUMNS.map((k) => r[k]);
     await run(env.DB,
-      `INSERT INTO oura_daily (user_id,day,sleep_duration_sec,sleep_score,readiness_score,steps,hrv,resting_hr,sleep_balance,synced_at)
-       VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+      `INSERT INTO oura_daily (user_id,day,${OURA_COLUMNS.join(",")},synced_at)
+       VALUES (?,?,${OURA_COLUMNS.map(() => "?").join(",")},datetime('now'))
        ON CONFLICT(user_id,day) DO UPDATE SET
-         sleep_duration_sec=COALESCE(excluded.sleep_duration_sec,oura_daily.sleep_duration_sec),
-         sleep_score=COALESCE(excluded.sleep_score,oura_daily.sleep_score),
-         readiness_score=COALESCE(excluded.readiness_score,oura_daily.readiness_score),
-         steps=COALESCE(excluded.steps,oura_daily.steps),
-         hrv=COALESCE(excluded.hrv,oura_daily.hrv),
-         resting_hr=COALESCE(excluded.resting_hr,oura_daily.resting_hr),
-         sleep_balance=COALESCE(excluded.sleep_balance,oura_daily.sleep_balance),
+         ${OURA_COLUMNS.map((k) => `${k}=COALESCE(excluded.${k},oura_daily.${k})`).join(",\n         ")},
          synced_at=datetime('now')`,
-      userId, r.day, r.sleep_duration_sec, r.sleep_score, r.readiness_score, r.steps, r.hrv, r.resting_hr, r.sleep_balance);
+      userId, r.day, ...vals);
   }
   return { synced: rows.length };
 }

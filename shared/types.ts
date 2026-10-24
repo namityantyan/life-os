@@ -46,6 +46,45 @@ export type PressureAssessment = {
   level: PressureLevel; direction: "up" | "down" | "flat" | null; missing: boolean;
 };
 
+/**
+ * Movement targets built from Oura's readiness-adjusted daily target, 厚労省「健康づくりのための身体活動・運動ガイド2023」
+ * (adults: 3メッツ以上の身体活動 1日60分以上 ≒ 8,000歩, 運動 週60分以上, 筋トレ 週2〜3日, 座りっぱなしに注意) and WHO 2020
+ * (中強度 週150〜300分 or 高強度 75〜150分, 筋トレ 週2日以上). 中〜高強度の分数は中強度換算（高強度は2倍）。
+ */
+export type ActivityMode = "push" | "recovery" | "rest";
+export type ActivityPlan = {
+  day: string;
+  is_today: boolean;
+  mode: ActivityMode;
+  /** why the plan eases off (low readiness / raised temperature); null in push mode */
+  reason: string | null;
+  /** which target is binding: Oura's own daily target or the guideline floor */
+  source: "oura" | "guideline";
+  steps: number | null;
+  steps_target: number;
+  steps_left: number | null;
+  /** brisk-walk minutes that close the remaining gap */
+  walk_minutes_left: number | null;
+  oura: {
+    target_meters: number | null; equivalent_walking_distance: number | null; meters_to_target: number | null;
+    active_calories: number | null; target_calories: number | null; activity_score: number | null;
+    contributors: Record<string, number> | null;
+  };
+  mvpa_today_min: number | null;
+  sedentary_min: number | null;
+  inactivity_alerts: number | null;
+  /** calendar week (Mon–Sun, JST) */
+  week: {
+    start: string; days_left: number; days_with_data: number;
+    mvpa_min: number; mvpa_min_target: number; mvpa_min_goal: number; vigorous_min: number;
+    met_minutes: number; met_minutes_target: number;
+    strength_days: number; strength_days_target: number;
+    goal_days_met: number;
+  };
+  /** short Japanese advice lines, most important first */
+  advice: string[];
+};
+
 // Life Context: the shared, cross-module snapshot that AI advice is built from.
 export type LifeContext = {
   now: string; // ISO JST
@@ -57,6 +96,8 @@ export type LifeContext = {
     checkup_latest: Record<string, unknown> | null;
     meal_summary: { energy_kcal: number | null; protein_g: number | null; fat_g: number | null; carbs_g: number | null; partial: boolean } | null;
     beauty_routine_count: number;
+    /** Today's movement target and this week's tally (worker/modules/health/activity.ts). null = no Oura data at all. */
+    activity: ActivityPlan | null;
   };
   training: { trained_today: boolean; last_session: { part: string; started_at: string } | null; sessions_7d: number };
   planner: { tasks_open: number; events_today: { title: string; start_at: string | null }[]; reminders_pending: number };

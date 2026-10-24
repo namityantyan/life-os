@@ -8,7 +8,7 @@ import {
 import { api, useApi, fmtNum, fmtYen, fmtDate, fmtDateTime, todayJst } from "@/lib/api";
 import { MealTab } from "./MealTab";
 import { EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, numOrNull as sharedNumOrNull, type ChatItem, type Nutrition } from "./shared";
-import type { PressureAssessment, PressureLevel } from "@shared/types";
+import type { ActivityPlan, PressureAssessment, PressureLevel } from "@shared/types";
 
 /* ======================================================================
    Types (mirror of worker/modules/health)
@@ -19,7 +19,7 @@ type Personal = { ready: false; count: number; reason: "insufficient" | "no_base
 type Overview = {
   today: string; oura: OuraRow | null; oura_configured: boolean; series: OuraRow[];
   weather: { location: { name: string }; pressure: PressureAssessment; fetched_at: string; series: { time: string; hpa: number | null }[] } | null;
-  weather_configured: boolean; suggestion: string; pressure_logs: PressureLog[]; personal: Personal;
+  weather_configured: boolean; suggestion: string; activity?: ActivityPlan | null; pressure_logs: PressureLog[]; personal: Personal;
 };
 type Beauty = { id: string; name: string; product: string | null; timing: string | null; purpose: string | null };
 type Policy = { keep: string[]; add: string[]; review: string[]; note?: string; updated_at?: string } | null;
@@ -82,6 +82,37 @@ export default function Page() {
 }
 
 /* ======================================================================
+   活動（今日の目標と今週の集計）
+   ====================================================================== */
+const MODE_BADGE: Record<ActivityPlan["mode"], { label: string; tone: "green" | "orange" | "red" }> = {
+  push: { label: "しっかり動く日", tone: "green" }, recovery: { label: "積極的休養", tone: "orange" }, rest: { label: "休養優先", tone: "red" },
+};
+function ActivityCard({ a }: { a: ActivityPlan }) {
+  const w = a.week;
+  const m = MODE_BADGE[a.mode];
+  return (
+    <Card as="section" className="space-y-4" data-testid="activity-card">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg font-semibold tracking-tight">活動</h2>
+        <Badge tone={m.tone}>{m.label}</Badge>
+        <span className="text-xs text-label-3">{a.source === "oura" ? "目標: Ouraの今日の目標" : "目標: 厚労省ガイド2023（1日8,000歩）"}</span>
+      </div>
+      <div className="space-y-2">
+        <NutrientBar label="今日の歩数" unit="歩" value={a.is_today ? a.steps : null} target={a.steps_target} partial={!a.is_today} />
+        <NutrientBar label="今週の中〜高強度" unit="分" value={w.mvpa_min} target={w.mvpa_min_target} partial={w.days_with_data === 0} />
+        <NutrientBar label="今週の筋トレ" unit="日" value={w.strength_days} target={w.strength_days_target} partial={false} />
+      </div>
+      {a.advice.length > 0 && (
+        <ul className="space-y-1 text-sm" data-testid="activity-advice">
+          {a.advice.map((l, i) => <li key={i} className={i === 0 ? "font-medium" : "text-label-2"}>{l}</li>)}
+        </ul>
+      )}
+      <p className="text-xs text-label-3">基準: 1日8,000歩（3メッツ以上60分）・中〜高強度 週150〜300分（WHO、高強度は2倍換算）・筋トレ 週2〜3日・座りっぱなしは50分まで。</p>
+    </Card>
+  );
+}
+
+/* ======================================================================
    体調
    ====================================================================== */
 function ConditionTab({ data, reload, error }: { data: Overview | null; reload: () => void; error: string | null }) {
@@ -132,6 +163,8 @@ function ConditionTab({ data, reload, error }: { data: Overview | null; reload: 
             <Stat label="睡眠バランス" value={fmtNum(o?.sleep_balance)} hint="0〜100のスコア" />
           </div>
         </Card>
+
+        {data.activity && <ActivityCard a={data.activity} />}
 
         <Card as="section" className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
