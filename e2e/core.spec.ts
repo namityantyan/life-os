@@ -10,7 +10,7 @@ test("login gate shows dev login and enters the app", async ({ page }) => {
 
 test("sidebar collapses and all modules navigate", async ({ authed: page }) => {
   await page.getByTestId("sidebar-toggle").click();
-  await expect(page.getByTestId("sidebar")).toHaveCSS("width", "64px");
+  await expect(page.getByTestId("sidebar")).toHaveCSS("width", "68px");
   await page.getByTestId("sidebar-toggle").click();
   for (const key of ["planner", "ideas", "notes", "health", "training", "assets", "cards", "fx", "finance", "royalty", "images", "backups", "requests", "settings", "dashboard"]) {
     await page.getByTestId(`nav-${key}`).click();
