@@ -24,6 +24,9 @@ export async function runScheduled(env: Env, cron: string) {
       try { await maybeWeekly(env, u.id); } catch (e) { console.error("weekly", e); }
     }
   }
+  if (cron === "*/10 * * * *") {
+    try { const m = await import("./modules/images/routes"); await m.syncPendingImages(env); } catch (e) { console.error("images", e); }
+  }
   await processQueue(env);
 }
 

@@ -19,12 +19,13 @@ const ALIASES: Record<ModuleKey, string[]> = {
   fx: ["fx", "為替", "シグナル", "mt5", "ドル円", "トレード"],
   finance: ["お金", "finance", "請求", "源泉", "fp", "money", "請求書", "領収書"],
   royalty: ["明細", "印税", "著作権", "royalty", "jasrac", "nextone"],
+  images: ["画像生成", "画像", "イラスト", "生成", "image", "images", "絵"],
   backups: ["バックアップ", "backup", "dropbox"],
   requests: ["リクエスト", "要望", "request", "機能"],
   settings: ["設定", "settings", "通知", "天気", "接続", "表示", "端末"],
 };
 const ICONS: Record<ModuleKey, string> = {
-  dashboard: "◉", planner: "▦", ideas: "✦", notes: "≡", health: "♥", training: "⚡", assets: "◈", cards: "▭", fx: "⇅", finance: "¥", royalty: "♪", backups: "☁", requests: "✎", settings: "⚙",
+  dashboard: "◉", planner: "▦", ideas: "✦", notes: "≡", health: "♥", training: "⚡", assets: "◈", cards: "▭", fx: "⇅", finance: "¥", royalty: "♪", images: "◐", backups: "☁", requests: "✎", settings: "⚙",
 };
 
 type Cmd = { id: string; group: string; label: string; hint?: string; icon: ReactNode; keywords: string[]; run: () => Promise<void> | void };

@@ -13,3 +13,6 @@ FREEE_CLIENT_ID=
 FREEE_CLIENT_SECRET=
 BACKUP_INGEST_TOKEN=
 FX_CONNECTOR_TOKEN=
+# 画像生成（任意）: Mac の imggen サービス。未設定なら画像生成ページは「未設定」表示。
+IMGGEN_URL=
+IMGGEN_TOKEN=

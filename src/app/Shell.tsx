@@ -13,7 +13,7 @@ const TAB_KEYS: ModuleKey[] = ["dashboard", "planner", "health", "training", "ca
 const TAB_SHORT: Partial<Record<ModuleKey, string>> = { dashboard: "ホーム", planner: "予定", health: "健康", training: "トレ", cards: "カード" };
 
 const ICONS: Record<ModuleKey, string> = {
-  dashboard: "◉", planner: "▦", ideas: "✦", notes: "≡", health: "♥", training: "⚡", assets: "◈", cards: "▭", fx: "⇅", finance: "¥", royalty: "♪", backups: "☁", requests: "✎", settings: "⚙",
+  dashboard: "◉", planner: "▦", ideas: "✦", notes: "≡", health: "♥", training: "⚡", assets: "◈", cards: "▭", fx: "⇅", finance: "¥", royalty: "♪", images: "◐", backups: "☁", requests: "✎", settings: "⚙",
 };
 
 export function Shell({ children }: { children: ReactNode }) {

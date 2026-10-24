@@ -8,7 +8,7 @@ import worker from "../worker/index";
 import { runScheduled } from "../worker/cron";
 import type { Env } from "../worker/env";
 import { D1Shim, migrate } from "../hub/d1";
-import { KvShim, aiRelay, cronMatches } from "./shims";
+import { KvShim, aiRelay, cronMatches, dirImageStore } from "./shims";
 
 const ROOT = resolve(process.env.LIFEOS_ROOT ?? ".");
 const DATA = resolve(process.env.LIFEOS_DATA_DIR ?? join(ROOT, "data"));
@@ -20,6 +20,8 @@ const need = (k: string) => { const v = process.env[k]; if (!v) { console.error(
 const db = new D1Shim(join(DATA, "lifeos.sqlite"));
 migrate(db, readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).map((name) => ({ name, sql: readFileSync(join(MIGRATIONS, name), "utf8") })));
 const kv = new KvShim(db);
+// Generated images (画像生成) are files under data/images, outside SQLite, so the daily DB backups stay small.
+const imageStore = dirImageStore(resolve(process.env.IMGGEN_STORE_DIR ?? join(DATA, "images")));
 
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".webmanifest": "application/manifest+json", ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2", ".map": "application/json" };
 /** Static assets with SPA fallback (same as Workers assets "single-page-application"). */
@@ -36,9 +38,9 @@ const assets = {
 };
 
 const env = {
-  DB: db, KV: kv, ASSETS: assets, AI: aiRelay(process.env.AI_RELAY_URL, process.env.AI_RELAY_SECRET),
+  DB: db, KV: kv, ASSETS: assets, IMAGE_STORE: imageStore, AI: aiRelay(process.env.AI_RELAY_URL, process.env.AI_RELAY_SECRET),
   APP_NAME: "Life OS", APP_ORIGIN: need("APP_ORIGIN"), ALLOWED_EMAILS: need("ALLOWED_EMAILS"), SESSION_SECRET: need("SESSION_SECRET"),
-  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(GOOGLE_|VAPID_|DISCORD_|OURA_|FREEE_|BACKUP_|FX_CONNECTOR_TOKEN$|AI_RELAY_|DEV_LOGIN$)/.test(k))),
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(GOOGLE_|VAPID_|DISCORD_|OURA_|FREEE_|BACKUP_|FX_CONNECTOR_TOKEN$|AI_RELAY_|IMGGEN_(URL|TOKEN)$|DEV_LOGIN$)/.test(k))),
 } as unknown as Env;
 
 const pending = new Set<Promise<unknown>>();
