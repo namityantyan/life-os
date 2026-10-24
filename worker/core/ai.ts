@@ -40,8 +40,8 @@ function fallbackReply(messages: ChatMessage[], json?: boolean): string {
   return `（AIに接続できないため、保存済みデータだけで応答しています）\n\n受け取った内容: ${last.slice(0, 200)}`;
 }
 
-export async function chatJson<T>(env: Env, messages: ChatMessage[], fallback: T): Promise<{ data: T; provider: "workers-ai" | "fallback"; parsed: boolean }> {
-  const r = await chat(env, messages, { json: true });
+export async function chatJson<T>(env: Env, messages: ChatMessage[], fallback: T, opts: { timeoutMs?: number; maxTokens?: number } = {}): Promise<{ data: T; provider: "workers-ai" | "fallback"; parsed: boolean }> {
+  const r = await chat(env, messages, { json: true, ...opts });
   if (r.provider === "fallback") return { data: fallback, provider: "fallback", parsed: false };
   const parsedOut = parseJsonLoose<T>(r.text);
   if (parsedOut === undefined) {

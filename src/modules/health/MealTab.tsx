@@ -1,649 +1,231 @@
-import { Icon } from "@/components/icons";
 /**
- * 食事: a log of what was actually eaten each day. Saved sets ("いつもの食事") and saved foods
- * ("よく食べるもの") are added with one tap; nutrition is copied into the entry at that moment.
+ * 食事: a log of what was actually eaten each day (JST). Type "ゆで卵 2個" or tap a saved food / set;
+ * the row appears at once and its nutrition fills in from the 日本食品標準成分表 in the background.
+ * Tapping a row opens one focused sheet to correct the food, grams, servings, cost or values.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import {
-  Badge, Button, Card, ChatPanel, EmptyState, ErrorBanner, Field, IconButton, Input, Item, Modal,
-  PageSkeleton, Section, Select, Stagger, cx, useToast, type ChatMsg,
-} from "@/components/ui";
-import { api, useApi, fmtNum, fmtYen, fmtDate, todayJst } from "@/lib/api";
-import { ALL_NUTRIENTS, EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, fromShown, nutrientLabel, numOrNull, shownText, toShown, type ChatItem, type Nutrition } from "./shared";
-
-type TableRef = { number: string; name: string; grams: number; grams_estimated?: boolean };
-type Food = { id: string; name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; nutrition_ref: TableRef | null; cost_per_serving: number | null; use_count: number };
-type SetItem = { id: string; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; cost_per_serving: number | null };
-type MealSet = { id: string; name: string; items: SetItem[]; nutrition: { totals: Record<string, number | null>; partial: boolean }; cost: { total: number | null; missing: number } };
-type Entry = { id: string; day: string; food_name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; nutrition_ref: TableRef | null; cost: number | null; servings: number };
-type Summary = { nutrition: { totals: Record<string, number | null>; partial: boolean; item_count: number; with_nutrition: number; estimated_count: number }; cost: { total: number | null; counted: number; missing: number }; targets: Nutrition };
-type DayRes = { day: string; entries: Entry[]; summary: Summary; foods: Food[]; sets: MealSet[] };
-
-const shiftDay = (day: string, delta: number) => new Date(Date.parse(day + "T00:00:00Z") + delta * 86400e3).toISOString().slice(0, 10);
-const dayLabel = (day: string) => {
-  const today = todayJst();
-  if (day === today) return "今日";
-  if (day === shiftDay(today, -1)) return "昨日";
-  const d = new Date(day + "T00:00:00Z");
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${["日", "月", "火", "水", "木", "金", "土"][d.getUTCDay()]}）`;
-};
-
-const SOURCE_BADGE: Record<string, { label: string; tone: "green" | "accent" | "purple" }> = {
-  recorded: { label: "記録", tone: "green" }, table: { label: "成分表", tone: "purple" }, estimated: { label: "推定", tone: "accent" },
-};
-function SourceBadge({ source }: { source: string | null }) {
-  const b = source ? SOURCE_BADGE[source] : null;
-  return b ? <Badge tone={b.tone}>{b.label}</Badge> : <Badge>栄養未計算</Badge>;
-}
-const TABLE_CREDIT = "栄養値の出典: 文部科学省「日本食品標準成分表（八訂）増補2023年」（可食部100gあたりの値から量に合わせて計算）";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Icon } from "@/components/icons";
+import { Button, Card, ChatPanel, EmptyState, ErrorBanner, IconButton, Input, Skeleton, cx, useToast } from "@/components/ui";
+import { api, useApi, todayJst } from "@/lib/api";
+import type { ChatItem } from "./shared";
+import { DaySummary, WeekStrip } from "./meal/Summary";
+import { QuickAdd } from "./meal/QuickAdd";
+import { EntryList } from "./meal/EntryList";
+import { ItemSheet, type EditPatch, type Editable } from "./meal/ItemSheet";
+import { LibrarySheet } from "./meal/Library";
+import { TargetsSheet } from "./meal/Targets";
+import { ProposalCard, type ApplyRes } from "./meal/Proposal";
+import { Sheet } from "./meal/Sheet";
+import { entryEditable, nutritionBody, useMealLog } from "./meal/store";
+import { TABLE_CREDIT, dayName, mdLabel, shiftDay, type DayTotal, type Entry, type Food, type MealSet, type SetItem } from "./meal/model";
 
 /* ---------------------------------------------------------------- chat */
-function useChat(channel: "meal") {
+function useMealChat() {
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
-  useEffect(() => { let alive = true; api.get<{ items: ChatItem[] }>(`/health/chat/${channel}`).then((r) => alive && setMessages(r.items)).catch(() => {}); return () => { alive = false; }; }, [channel]);
+  useEffect(() => { let alive = true; api.get<{ items: ChatItem[] }>("/health/chat/meal").then((r) => alive && setMessages(r.items)).catch(() => {}); return () => { alive = false; }; }, []);
   const send = useCallback(async (text: string) => {
     setMessages((m) => [...m, { role: "user", content: text }]); setBusy(true);
-    try { const r = await api.post<{ reply: string; provider: string; proposal: any; id: string }>(`/health/chat/${channel}`, { message: text }); setMessages((m) => [...m, { id: r.id, role: "assistant", content: r.reply, provider: r.provider, proposal: r.proposal }]); }
-    catch (e: any) { toast(e?.message ?? "送信に失敗しました", "error"); }
+    try { const r = await api.post<{ reply: string; provider: string; proposal: unknown; id: string }>("/health/chat/meal", { message: text }); setMessages((m) => [...m, { id: r.id, role: "assistant", content: r.reply, provider: r.provider, proposal: r.proposal }]); }
+    catch (e: any) { toast(e?.message ?? "送信できませんでした", "error"); }
     finally { setBusy(false); }
-  }, [channel, toast]);
+  }, [toast]);
   const markApplied = useCallback((id: string, applied: Record<string, unknown>) => setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, applied } : m))), []);
   return { messages, busy, send, markApplied };
 }
+const useWide = () => {
+  const q = "(min-width: 1024px)";
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => { const m = window.matchMedia(q); const h = () => setWide(m.matches); m.addEventListener("change", h); return () => m.removeEventListener("change", h); }, []);
+  return wide;
+};
+
+type Editing = { kind: "entry"; entry: Entry } | { kind: "food"; food: Food } | { kind: "item"; item: SetItem } | null;
 
 /* ---------------------------------------------------------------- page */
 export function MealTab() {
   const toast = useToast();
-  const [day, setDay] = useState(todayJst());
-  const d = useApi<DayRes>(`/health/meals/day?day=${day}`, { deps: [day] });
-  const history = useApi<{ items: { day: string; count: number; nutrition: { totals: Record<string, number | null> } }[] }>("/health/meals/days?limit=10");
-  const chat = useChat("meal");
-  const [editing, setEditing] = useState<Entry | "new" | null>(null);
-  const [foodEditing, setFoodEditing] = useState<Food | "new" | null>(null);
+  const today = todayJst();
+  const [day, setDay] = useState(today);
+  const log = useMealLog(day);
+  const { d, entries, sum, lookups } = log;
+  const weekEnd = day >= shiftDay(today, -6) ? today : shiftDay(day, 3) > today ? today : shiftDay(day, 3);
+  const week = useApi<{ items: DayTotal[] }>(`/health/meals/days?to=${weekEnd}&n=7`, { quiet: true });
+  const chat = useMealChat();
+  const wide = useWide();
+  const [editing, setEditing] = useState<Editing>(null);
+  const [library, setLibrary] = useState(false);
   const [targetsOpen, setTargetsOpen] = useState(false);
-  const [setsOpen, setSetsOpen] = useState(false);
-  const [showExtra, setShowExtra] = useState(false);
-  const [adding, setAdding] = useState<string | null>(null);
-  const [estimating, setEstimating] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [setFromDay, setSetFromDay] = useState(false);
 
-  const reload = useCallback(() => { d.reload(true); history.reload(true); }, [d, history]);
-  const data = d.data;
-  /** Write-endpoints return the day log only, so merge it into the cached day (keeping foods/sets). */
-  const apply = useCallback((res: Partial<DayRes>) => {
-    d.setData((prev) => (prev ? { ...prev, ...res, foods: res.foods ?? prev.foods, sets: res.sets ?? prev.sets } : (res as DayRes)));
-    history.reload(true);
-  }, [d, history]);
+  const go = (next: string) => { log.flush(); setDay(next > today ? today : next); };
+  const data = d.data; const ready = data?.day === day;
+  const foods = data?.foods ?? [], sets = data?.sets ?? [], targets = data?.summary?.targets ?? {};
+  const weekDays = useMemo(() => (week.data?.items ?? []).map((w) => (w.day === day && ready ? { day: w.day, kcal: sum.nutrition.totals.energy_kcal, count: entries.length } : { day: w.day, kcal: w.nutrition.totals.energy_kcal, count: w.count })), [week.data, day, ready, sum, entries.length]);
+  const label = dayName(day);
 
-  if (d.loading && !data) return <PageSkeleton cards={3} />;
-  if (!data?.summary) return <div><ErrorBanner message={d.error} onRetry={() => d.reload()} testId="health-error" /><EmptyState title="食事を読み込めませんでした" /></div>;
-  const entries = data.entries ?? [], savedFoods = data.foods ?? [], mealSets = data.sets ?? [];
-  const { totals, partial, item_count, with_nutrition, estimated_count } = data.summary.nutrition;
-  const cost = data.summary.cost; const targets = data.summary.targets;
+  // live copies for the sheet, so a background lookup that finishes shows up in it
+  const editable: Editable | null = useMemo(() => {
+    if (!editing) return null;
+    if (editing.kind === "entry") { const e = entries.find((x) => x.id === editing.entry.id); return e ? entryEditable(e) : null; }
+    if (editing.kind === "food") { const f = foods.find((x) => x.id === editing.food.id) ?? editing.food; return { id: f.id, kind: "food", name: f.name, amount: f.amount, unit: f.unit, servings: 1, costPer: f.cost_per_serving, nutrition: f.nutrition, source: f.nutrition_source, ref: f.nutrition_ref }; }
+    const m = sets.flatMap((s) => s.items).find((x) => x.id === editing.item.id) ?? editing.item;
+    return { id: m.id, kind: "item", name: m.food_name, amount: m.amount, unit: m.unit, servings: 1, costPer: m.cost_per_serving, nutrition: m.nutrition, source: m.nutrition_source, ref: m.nutrition_ref };
+  }, [editing, entries, foods, sets]);
 
-  const addSet = async (s: MealSet) => {
-    setAdding(s.id);
-    try { const r = await api.post<DayRes & { added: number }>(`/health/meals/sets/${s.id}/add`, { day }); apply(r); toast(`${s.name}の${r.added}件を追加しました`, "success"); }
-    catch (e: any) { toast(e?.message ?? "追加できませんでした", "error"); } finally { setAdding(null); }
-  };
-  const addFood = async (f: Food) => {
-    setAdding(f.id);
+  const saveEdit = async (p: EditPatch) => {
+    const cur = editing; setEditing(null); if (!cur) return;
+    if (cur.kind === "entry") return log.editEntry(cur.entry, p);
+    const body = { name: p.name, amount: p.amount, unit: p.unit, cost_per_serving: p.costPer, ...nutritionBody(p) };
     try {
-      const r = await api.post<DayRes>("/health/meals/entries", { day, food_id: f.id, food_name: f.name, amount: f.amount, unit: f.unit, nutrition: f.nutrition, nutrition_source: f.nutrition_source, cost: f.cost_per_serving });
-      apply(r); toast(`${f.name}を追加しました`, "success");
-    } catch (e: any) { toast(e?.message ?? "追加できませんでした", "error"); } finally { setAdding(null); }
-  };
-  const removeEntry = async (e: Entry) => {
-    try { apply(await api.del<DayRes>(`/health/meals/entries/${e.id}`)); toast("削除しました"); }
-    catch (err: any) { toast(err?.message ?? "削除できませんでした", "error"); }
-  };
-  /** Fill an entry from the 成分表; if no table food fits, fall back to an AI estimate (marked 推定). */
-  const estimateEntry = async (e: Entry) => {
-    setEstimating(e.id);
-    try {
-      let t = await api.post<{ applied: boolean; reason?: string; match?: { name: string; grams: number } }>(`/health/meals/entry/${e.id}/table`, {});
-      if (!t.applied && t.reason === "recorded") {
-        if (!confirm(`「${e.food_name}」には記録済みの栄養値があります。成分表の値で上書きしますか？`)) return;
-        t = await api.post(`/health/meals/entry/${e.id}/table`, { confirm: true });
+      if (cur.kind === "food") {
+        const r = await api.put<{ item: Food }>(`/health/meals/foods/${cur.food.id}`, body);
+        log.patch((x) => ({ ...x, foods: x.foods.map((f) => (f.id === r.item.id ? r.item : f)) }));
+        if (p.relookup) log.resolve("food", r.item.id, { quiet: true });
+      } else {
+        const r = await api.put<{ item: SetItem }>(`/health/meals/sets/${cur.item.set_id}/items/${cur.item.id}`, body);
+        log.patch((x) => ({ ...x, sets: x.sets.map((s) => (s.id === cur.item.set_id ? { ...s, items: s.items.map((m) => (m.id === r.item.id ? r.item : m)) } : s)) }));
+        log.refreshLibrary();
+        if (p.relookup) log.resolve("item", r.item.id, { quiet: true });
       }
-      if (t.applied) { toast(`成分表「${t.match?.name}」${fmtNum(t.match?.grams)}gで計算しました`, "success"); reload(); return; }
-      const r = await api.post<{ applied: boolean; reason?: string }>(`/health/meals/entry/${e.id}/estimate`, {});
-      if (r.applied) { toast("成分表に無いため、AIの推定値を入れました", "success"); reload(); }
-      else toast(r.reason === "ai_unavailable" ? "成分表に見つからず、AIにも接続できませんでした" : "栄養を計算できませんでした", "error");
-    } catch (err: any) { toast(err?.message ?? "計算に失敗しました", "error"); } finally { setEstimating(null); }
+      toast("保存しました", "success");
+    } catch (e: any) { toast(e?.message ?? "保存できませんでした", "error"); }
   };
-  const recalcFoods = async () => {
-    try {
-      const r = await api.post<{ updated: number; skipped: number }>("/health/meals/foods/recalc", {});
-      toast(`成分表で${r.updated}件を計算しました${r.skipped ? `（${r.skipped}件は該当なし）` : ""}`, "success"); reload();
-    } catch (e: any) { toast(e?.message ?? "計算できませんでした", "error"); }
-  };
-  const clearDay = async () => {
-    if (!confirm(`${dayLabel(day)}の記録をすべて削除しますか？`)) return;
-    try { apply(await api.del<DayRes>(`/health/meals/day/${day}`)); toast("記録を削除しました"); }
-    catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); }
-  };
-
-  return (
-    <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
-      <div className="xl:col-span-2 space-y-4">
-        {/* ---- day picker + totals ---- */}
-        <Card as="section" className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1">
-              <IconButton label="前の日" onClick={() => setDay(shiftDay(day, -1))} data-testid="day-prev"><Icon name="chevron-left" /></IconButton>
-              <span className="font-semibold tracking-tight tabular min-w-24 text-center" data-testid="day-label">{dayLabel(day)}</span>
-              <IconButton label="次の日" onClick={() => setDay(shiftDay(day, 1))} data-testid="day-next" disabled={day >= todayJst()}><Icon name="chevron-right" /></IconButton>
-              {day !== todayJst() && <Button size="sm" variant="ghost" onClick={() => setDay(todayJst())}>今日へ</Button>}
-            </div>
-            <div className="flex items-center gap-2">
-              {item_count > 0 && (partial ? <Badge tone="orange"><span data-testid="nutrition-partial">途中の値（{with_nutrition}/{item_count}件が計算済み）</span></Badge> : <Badge tone="green"><span data-testid="nutrition-complete">全件計算済み</span></Badge>)}
-              {estimated_count > 0 && <Badge>推定を含む {estimated_count}件</Badge>}
-              <Button size="sm" onClick={() => setTargetsOpen(true)} data-testid="targets-edit">目標を編集</Button>
-            </div>
-          </div>
-          {item_count === 0 ? <p className="text-sm text-label-3">まだ記録がありません。下のボタンから追加できます。</p> : (
-            <div className="space-y-2">
-              {(showExtra ? ALL_NUTRIENTS : MAIN_NUTRIENTS).map((n) => <NutrientBar key={n.key} label={n.label} unit={n.unit} value={totals[n.key] != null ? toShown(n.key, totals[n.key]!) : null} target={targets[n.key] != null ? toShown(n.key, targets[n.key]) : null} partial={partial} />)}
-              <Button size="sm" variant="ghost" aria-expanded={showExtra} onClick={() => setShowExtra((v) => !v)}>{showExtra ? "主要項目だけ表示" : "ミネラル・ビタミンも表示"}</Button>
-              {partial && <p className="text-xs text-label-2">栄養が未計算の記録があるため、合計は途中の値です。不足・過剰は断定しません。</p>}
-            </div>
-          )}
-          <div className="flex items-baseline gap-2 pt-1">
-            <span className="text-xs text-label-2 font-medium">食費（概算）</span>
-            <span className="text-lg font-semibold tabular" data-testid="meal-cost-total">{cost.total == null ? "未入力" : fmtYen(cost.total)}</span>
-            {cost.missing > 0 && <span className="text-xs text-label-3">費用未入力 {cost.missing}件（無料とは扱いません）</span>}
-          </div>
-        </Card>
-
-        {/* ---- one-tap add ---- */}
-        <Section title="ボタンで追加" action={<Button size="sm" variant="ghost" onClick={() => setSetsOpen(true)} data-testid="sets-manage">セットを管理</Button>}>
-          <Card className="space-y-3">
-            {mealSets.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium text-label-2">いつもの食事</div>
-                <div className="flex flex-wrap gap-2" data-testid="set-buttons">
-                  {mealSets.map((s) => (
-                    <Button key={s.id} variant="tinted" loading={adding === s.id} onClick={() => addSet(s)} disabled={s.items.length === 0} data-testid={`set-add-${s.name}`}
-                      title={s.items.map((i) => i.food_name).join("、")}>
-                      {s.name}
-                      <span className="text-xs opacity-70 ml-1">{s.items.length}品{s.nutrition.totals.energy_kcal != null ? `・${fmtNum(s.nutrition.totals.energy_kcal)}kcal` : ""}</span>
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-label-2">よく食べるもの</span>
-                <div className="flex gap-1">
-                  {savedFoods.some((f) => f.nutrition_source !== "recorded" && f.nutrition_source !== "table") && <Button size="sm" variant="ghost" onClick={recalcFoods} data-testid="foods-recalc">成分表で計算</Button>}
-                  <Button size="sm" variant="ghost" onClick={() => setFoodEditing("new")} data-testid="food-add">登録を追加</Button>
-                </div>
-              </div>
-              {savedFoods.length === 0 ? <p className="text-sm text-label-3">まだありません。食べたものを記録するとき「よく食べるものに登録」を選ぶと、次から1タップで追加できます。</p> : (
-                <div className="flex flex-wrap gap-2" data-testid="food-buttons">
-                  {savedFoods.map((f) => (
-                    <div key={f.id} className="group relative">
-                      <Button variant="secondary" loading={adding === f.id} onClick={() => addFood(f)} data-testid={`food-add-${f.name}`}
-                        title={[f.amount != null ? `${fmtNum(f.amount, 1)}${f.unit ?? ""}` : null, f.nutrition?.energy_kcal != null ? `${fmtNum(f.nutrition.energy_kcal)}kcal` : "栄養未計算", f.cost_per_serving != null ? fmtYen(f.cost_per_serving) : null].filter(Boolean).join("・")}>
-                        {f.name}
-                        {f.nutrition?.energy_kcal != null && <span className="text-xs opacity-60 ml-1 tabular">{fmtNum(f.nutrition.energy_kcal)}</span>}
-                      </Button>
-                      <button className="absolute -top-1.5 -right-1.5 size-6 grid place-items-center rounded-full bg-elevated shadow-[var(--shadow-card)] text-label-2 opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity" aria-label={`${f.name}を編集`} onClick={() => setFoodEditing(f)}><Icon name="edit" size={14} /></button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <Button variant="primary" className="w-full" onClick={() => setEditing("new")} data-testid="entry-add">食べたものを記録</Button>
-          </Card>
-        </Section>
-
-        {/* ---- the day's entries ---- */}
-        <Section title={`${dayLabel(day)}の記録`} action={entries.length > 0 ? <Button size="sm" variant="danger" onClick={clearDay} data-testid="day-clear">すべて削除</Button> : undefined}>
-          {entries.length === 0 ? <Card><EmptyState title="記録がありません" hint="セットやよく食べるものから、ボタンひとつで追加できます。" /></Card> : (
-            <Card padded={false} className="px-5 py-2">
-              <Stagger className="divide-y divide-separator">
-                {entries.map((e) => (
-                  <Item key={e.id} className="flex items-center gap-3 py-2.5">
-                    <div className="flex-1 min-w-0" data-testid="meal-item">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium truncate">{e.food_name}</span>
-                        {e.servings !== 1 && <Badge>×{fmtNum(e.servings, 1)}</Badge>}
-                        {e.amount != null && <span className="text-sm text-label-2 tabular">{fmtNum(e.amount, 1)}{e.unit ?? ""}</span>}
-                        <SourceBadge source={e.nutrition_source} />
-                      </div>
-                      <div className="text-xs text-label-3 tabular">{e.nutrition ? `${fmtNum(e.nutrition.energy_kcal)} kcal・P ${fmtNum(e.nutrition.protein_g)}・F ${fmtNum(e.nutrition.fat_g)}・C ${fmtNum(e.nutrition.carbs_g)}` : "—"}・{e.cost == null ? "費用未入力" : fmtYen(e.cost)}</div>
-                      {e.nutrition_ref && <div className="text-[0.6875rem] text-label-3 truncate" data-testid="entry-ref">成分表: {e.nutrition_ref.name} {fmtNum(e.nutrition_ref.grams)}g{e.nutrition_ref.grams_estimated ? "（量はAIの見積もり）" : ""}{e.servings !== 1 ? ` ×${fmtNum(e.servings, 1)}` : ""}</div>}
-                    </div>
-                    {e.nutrition_source !== "table" && e.nutrition_source !== "recorded" && <Button size="sm" variant="ghost" onClick={() => estimateEntry(e)} loading={estimating === e.id} aria-label={`${e.food_name}の栄養を成分表で計算`} data-testid="meal-estimate">成分表で計算</Button>}
-                    <Button size="sm" variant="ghost" onClick={() => setEditing(e)} aria-label={`${e.food_name}を編集`}>編集</Button>
-                    <IconButton label={`${e.food_name}を削除`} className="hover:text-red" onClick={() => removeEntry(e)}><Icon name="delete" size={18} /></IconButton>
-                  </Item>
-                ))}
-              </Stagger>
-            </Card>
-          )}
-          <p className="text-[0.6875rem] text-label-3 px-1">{TABLE_CREDIT}</p>
-          {(history.data?.items.length ?? 0) > 1 && (
-            <div className="flex flex-wrap gap-2 pt-1" data-testid="day-history">
-              {history.data!.items.map((h) => (
-                <button key={h.day} onClick={() => setDay(h.day)} className={cx("focus-ring rounded-[var(--radius-md)] px-2.5 py-1.5 text-xs transition-colors", h.day === day ? "bg-accent-soft text-accent" : "bg-fill text-label-2 hover:text-label")}>
-                  <span className="tabular">{fmtDate(h.day + "T00:00:00Z")}</span>
-                  <span className="ml-1 opacity-70">{h.nutrition.totals.energy_kcal != null ? `${fmtNum(h.nutrition.totals.energy_kcal)}kcal` : `${h.count}件`}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </Section>
-      </div>
-
-      {/* ---- chat ---- */}
-      <Card as="section" className="xl:col-span-1 flex flex-col xl:sticky xl:top-20 self-start w-full">
-        <h2 className="text-lg font-semibold tracking-tight mb-2">食事チャット</h2>
-        <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} placeholder="例: ゆで卵2個を食べた / たんぱく質の目標を120gに"
-          emptyHint="その日の記録と目標をもとに相談できます。食べたものの追加や目標の変更を頼むと、反映できる提案が出ます。"
-          renderExtra={(m) => {
-            const it = m as ChatItem;
-            return it.proposal && (it.proposal.error || it.proposal.entries?.length || it.proposal.targets)
-              ? <ProposalCard item={it} entries={entries} targets={targets} day={day} onApplied={(res, applied) => { chat.markApplied(it.id!, applied); apply(res); }} />
-              : null;
-          }} />
-      </Card>
-
-      <EntryModal entry={editing} day={day} foods={savedFoods} onClose={() => setEditing(null)} onSaved={(res, savedFood) => { setEditing(null); apply(res); if (savedFood) d.reload(true); }} />
-      <FoodModal food={foodEditing} onClose={() => setFoodEditing(null)} onSaved={() => { setFoodEditing(null); reload(); }} />
-      <TargetsModal open={targetsOpen} targets={targets} onClose={() => setTargetsOpen(false)} onSaved={() => { setTargetsOpen(false); reload(); }} />
-      <SetsModal open={setsOpen} sets={mealSets} foods={savedFoods} onClose={() => setSetsOpen(false)} onChanged={reload} />
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- proposal card */
-type LogOp =
-  | { op: "add"; food_name: string; amount: number | null; unit: string | null; cost: number | null; nutrition: Nutrition | null; save_as_food: boolean }
-  | { op: "update"; id: string; food_name: string; changes: { food_name?: string; amount?: number | null; unit?: string | null; cost?: number | null; nutrition?: Nutrition | null } }
-  | { op: "remove"; id: string; food_name: string };
-
-const amountText = (a: number | null | undefined, u: string | null | undefined) => (a == null ? "量未設定" : `${fmtNum(a, 1)}${u ?? ""}`);
-const kcalText = (n: Nutrition | null | undefined) => (n?.energy_kcal != null ? `約${fmtNum(n.energy_kcal)}kcal` : null);
-
-function ProposalCard({ item, entries, targets, day, onApplied }: {
-  item: ChatItem; entries: Entry[]; targets: Nutrition; day: string; onApplied: (res: DayRes, applied: Record<string, unknown>) => void;
-}) {
-  const toast = useToast();
-  const p = item.proposal as { entries?: LogOp[]; targets?: Nutrition | null; error?: string };
-  const ops = p.entries ?? [];
-  const targetRows = Object.entries(p.targets ?? {}).filter(([k, v]) => targets[k] !== v);
-  const [sel, setSel] = useState<Set<number>>(() => new Set(ops.map((_, i) => i)));
-  const [useTargets, setUseTargets] = useState(targetRows.length > 0);
-  const [busy, setBusy] = useState(false);
-  const applied = item.applied;
-  const count = sel.size + (useTargets ? 1 : 0);
-
-  if (p.error) return <div className="mt-2 rounded-[var(--radius-lg)] bg-orange/10 p-3 text-sm text-label-2" data-testid="meal-proposal-error">{p.error}</div>;
-
-  const describe = (op: LogOp) => {
-    if (op.op === "add") return { tag: "記録に追加", tone: "green" as const, text: `${op.food_name} ${amountText(op.amount, op.unit)}`, sub: [kcalText(op.nutrition), op.nutrition ? "栄養は推定" : "栄養未計算", op.cost != null ? fmtYen(op.cost) : null, op.save_as_food ? "よく食べるものにも登録" : null].filter(Boolean).join("・") };
-    if (op.op === "remove") { const cur = entries.find((m) => m.id === op.id); return { tag: "削除", tone: "red" as const, text: op.food_name, sub: cur ? amountText(cur.amount, cur.unit) : "" }; }
-    const cur = entries.find((m) => m.id === op.id); const ch = op.changes; const parts: string[] = [];
-    if (ch.food_name) parts.push(`名前を「${ch.food_name}」に`);
-    if (ch.amount !== undefined) parts.push(`量を${amountText(cur?.amount, cur?.unit)}から${amountText(ch.amount, ch.unit ?? cur?.unit)}に`);
-    if (ch.cost !== undefined) parts.push(`費用を${ch.cost == null ? "未入力" : fmtYen(ch.cost)}に`);
-    if (ch.nutrition) parts.push(`栄養を${kcalText(ch.nutrition) ?? "更新"}に（推定）`);
-    else if (ch.amount != null && cur?.nutrition) parts.push("栄養は量に合わせて換算（推定）");
-    return { tag: "変更", tone: "accent" as const, text: op.food_name, sub: parts.join("、") };
-  };
-
-  const applyNow = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post<DayRes & { added: number; updated: number; removed: number; targets: boolean; skipped: number }>("/health/meals/apply-proposal", {
-        message_id: item.id, day, entries: ops.filter((_, i) => sel.has(i)), targets: useTargets ? Object.fromEntries(targetRows) : null,
-      });
-      const msg = [r.added && `追加${r.added}件`, r.updated && `変更${r.updated}件`, r.removed && `削除${r.removed}件`, r.targets && "目標を更新"].filter(Boolean).join("・");
-      toast(msg ? `反映しました（${msg}）` : "反映できる変更がありませんでした", msg ? "success" : "neutral");
-      if (r.skipped) toast(`${r.skipped}件は現在の記録と合わないため反映しませんでした`);
-      onApplied(r, { added: r.added, updated: r.updated, removed: r.removed, targets: r.targets, at: new Date().toISOString() });
-    } catch (e: any) { toast(e?.message ?? "反映に失敗しました", "error"); } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="mt-2 rounded-[var(--radius-lg)] bg-subtle p-3 space-y-2 text-sm" data-testid="meal-proposal">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">提案された変更</span>
-        {applied ? <Badge tone="green"><span data-testid="meal-proposal-applied">反映済み</span></Badge> : null}
-      </div>
-      {ops.length > 0 && (
-        <ul className="space-y-1.5" data-testid="meal-proposal-ops">
-          {ops.map((op, i) => { const dsc = describe(op); return (
-            <li key={i}>
-              <label className={cx("flex items-start gap-2", applied && "opacity-60")}>
-                <input type="checkbox" className="mt-1 accent-[var(--accent)] size-4 shrink-0" checked={sel.has(i)} disabled={!!applied || busy}
-                  onChange={(e) => setSel((s0) => { const n = new Set(s0); if (e.target.checked) n.add(i); else n.delete(i); return n; })} aria-label={`${dsc.tag} ${dsc.text}`} />
-                <span className="min-w-0"><Badge tone={dsc.tone} className="mr-1.5">{dsc.tag}</Badge><span>{dsc.text}</span>{dsc.sub && <span className="block text-xs text-label-2 mt-0.5">{dsc.sub}</span>}</span>
-              </label>
-            </li>
-          ); })}
-        </ul>
-      )}
-      {targetRows.length > 0 && (
-        <div className={cx("space-y-1", applied && "opacity-60")}>
-          <label className="flex items-center gap-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={useTargets} disabled={!!applied || busy} onChange={(e) => setUseTargets(e.target.checked)} aria-label="目標値を変更する" /><Badge tone="purple">目標</Badge><span>1日の目標値を変更</span></label>
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 gap-y-0.5 pl-6 text-xs tabular" data-testid="meal-proposal-targets">
-            {targetRows.map(([k, v]) => { const n = nutrientLabel(k); return (
-              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(toShown(k, targets[k]), 1) : "未設定"}</span><Icon name="arrow-right" size={14} className="text-label-3 self-center" title="から" /><span className="text-right font-medium">{fmtNum(toShown(k, v), 1)}{n.unit}</span></div>
-            ); })}
-          </div>
-        </div>
-      )}
-      {!applied && (ops.length > 0 || targetRows.length > 0) && (
-        <Button size="sm" variant="primary" className="w-full" loading={busy} disabled={count === 0} onClick={applyNow} data-testid="meal-proposal-apply">選んだ変更を反映（{count}件）</Button>
-      )}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- 成分表 lookup panel */
-type LookupMatch = { number: string; name: string; grams: number; grams_estimated: boolean; nutrition: Nutrition };
-type TableValue = { nutrition: Nutrition; ref: TableRef } | null;
-
-/**
- * Looks the typed food up in the 成分表 as the user types (debounced), shows the matched food and
- * grams, and lets the user switch to another candidate or correct the grams. Reports the result upward.
- */
-function TableLookup({ name, amount, unit, onChange, onGrams, disabled }: { name: string; amount: string; unit: string; onChange: (v: TableValue) => void; onGrams?: (grams: number) => void; disabled?: boolean }) {
-  const [state, setState] = useState<{ loading: boolean; match: LookupMatch | null; candidates: { number: string; name: string }[]; note?: string }>({ loading: false, match: null, candidates: [] });
-  const [grams, setGrams] = useState("");
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ number: string; name: string }[]>([]);
-  const [open, setOpen] = useState(false);
-  const lastAuto = useRef<string>("");
-  useEffect(() => {
-    if (disabled || !name.trim()) { setState({ loading: false, match: null, candidates: [] }); onChange(null); return; }
-    const key = `${name.trim()}|${amount}|${unit}`;
-    if (key === lastAuto.current) return; // amount was just synced from a grams edit
-    lastAuto.current = key;
-    let alive = true;
-    const t = setTimeout(async () => {
-      setState((s) => ({ ...s, loading: true }));
-      try {
-        const r = await api.post<{ match: LookupMatch | null; candidates: { number: string; name: string }[]; note?: string }>("/health/meals/lookup", { name: name.trim(), amount: numOrNull(amount), unit: unit.trim() || null });
-        if (!alive) return;
-        setState({ loading: false, match: r.match, candidates: r.candidates, note: r.note });
-        setGrams(r.match ? String(r.match.grams) : "");
-        onChange(r.match ? { nutrition: r.match.nutrition, ref: { number: r.match.number, name: r.match.name, grams: r.match.grams, grams_estimated: r.match.grams_estimated } } : null);
-      } catch { if (alive) setState({ loading: false, match: null, candidates: [], note: "成分表を検索できませんでした" }); }
-    }, 700);
-    return () => { alive = false; clearTimeout(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, amount, unit, disabled]);
-  useEffect(() => {
-    if (!open || !query.trim()) { setResults([]); return; }
-    const t = setTimeout(async () => { try { setResults((await api.get<{ items: { number: string; name: string }[] }>(`/health/meals/table/search?q=${encodeURIComponent(query.trim())}`)).items); } catch { setResults([]); } }, 300);
-    return () => clearTimeout(t);
-  }, [query, open]);
-  const choose = async (number: string, g?: number) => {
-    const gramsN = g ?? (numOrNull(grams) ?? state.match?.grams ?? 100);
-    const r = await api.post<{ number: string; name: string; grams: number; nutrition: Nutrition }>("/health/meals/table/compute", { number, grams: gramsN });
-    const m = { number: r.number, name: r.name, grams: r.grams, grams_estimated: false, nutrition: r.nutrition };
-    setState((s) => ({ ...s, match: m })); setGrams(String(r.grams)); setOpen(false);
-    onChange({ nutrition: m.nutrition, ref: { number: m.number, name: m.name, grams: m.grams, grams_estimated: false } });
-    if (g != null && onGrams) {
-      const isGramUnit = !unit.trim() || /^(g|ｇ|グラム|ml|mL|cc)$/.test(unit.trim());
-      if (isGramUnit) { lastAuto.current = `${name.trim()}|${r.grams}|${unit.trim() || "g"}`; onGrams(r.grams); }
+  const deleteEditing = () => {
+    const cur = editing; setEditing(null); if (!cur) return;
+    if (cur.kind === "entry") return log.removeEntry(cur.entry);
+    if (cur.kind === "food") {
+      if (!confirm(`「${cur.food.name}」を一覧から削除しますか？（過去の記録は残ります）`)) return;
+      log.patch((x) => ({ ...x, foods: x.foods.filter((f) => f.id !== cur.food.id) }));
+      api.del(`/health/meals/foods/${cur.food.id}`).catch((e) => { toast(e?.message ?? "削除できませんでした", "error"); log.refreshLibrary(); });
+    } else {
+      log.patch((x) => ({ ...x, sets: x.sets.map((s) => (s.id === cur.item.set_id ? { ...s, items: s.items.filter((m) => m.id !== cur.item.id) } : s)) }));
+      api.del(`/health/meals/sets/${cur.item.set_id}/items/${cur.item.id}`).then(() => log.refreshLibrary()).catch((e) => { toast(e?.message ?? "外せませんでした", "error"); log.refreshLibrary(); });
     }
   };
-  if (disabled || !name.trim()) return null;
-  const m = state.match;
+  const onApplied = (res: ApplyRes, applied: Record<string, unknown>, id: string) => {
+    chat.markApplied(id, applied);
+    if (res.day === day) log.patch((x) => ({ ...x, entries: [...res.entries, ...x.entries.filter((e) => e.id.startsWith("tmp-"))], summary: { ...x.summary, targets: res.summary.targets } }));
+    else log.patch((x) => ({ ...x, summary: { ...x.summary, targets: res.summary.targets } }));
+    if (res.added) log.refreshLibrary();
+    for (const pid of res.pending_ids ?? []) log.resolve("entry", pid, { quiet: true });
+  };
+
+  const chatPanel = (h: string) => (
+    <ChatPanel messages={chat.messages} onSend={chat.send} busy={chat.busy} height={h}
+      placeholder="例: ゆで卵2個を食べた / たんぱく質の目標を120gに"
+      emptyHint="今日の記録と目標をもとに相談できます。記録の追加・変更や目標の変更を頼むと、反映できる変更が下に出ます。"
+      renderExtra={(m) => { const it = m as ChatItem; return it.proposal ? <ProposalCard item={it} entries={day === today ? entries : []} targets={targets} onApplied={(r, a) => onApplied(r, a, it.id!)} /> : null; }} />
+  );
+
+  if (!data && d.loading) return <MealSkeleton />;
+  if (!data?.summary) return <div><ErrorBanner message={d.error} onRetry={() => d.reload()} testId="health-error" /><EmptyState title="食事を読み込めませんでした" /></div>;
+
   return (
-    <div className="rounded-[var(--radius-md)] bg-subtle p-3 space-y-2 text-sm" data-testid="table-lookup">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">成分表から計算</span>
-        {state.loading && <span className="text-xs text-label-3">検索中…</span>}
-      </div>
-      {m ? (
-        <>
-          <div className="flex items-start gap-2">
-            <Badge tone="purple">成分表</Badge>
-            <span className="min-w-0 flex-1" data-testid="table-match">{m.name}</span>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_21rem] xl:grid-cols-[minmax(0,1fr)_24rem] items-start">
+      <div className="space-y-4 min-w-0">
+        {/* day navigation + the last 7 days */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-1">
+            <IconButton label="前の日" onClick={() => go(shiftDay(day, -1))} data-testid="day-prev"><Icon name="chevron-left" /></IconButton>
+            <h2 className="flex-1 min-w-0 text-center sm:text-left sm:flex-none sm:px-1 font-semibold tracking-tight text-lg" data-testid="day-label" aria-live="polite">
+              {label ?? mdLabel(day)}{label && <span className="text-label-2 font-normal text-sm ml-2">{mdLabel(day)}</span>}
+            </h2>
+            <IconButton label="次の日" onClick={() => go(shiftDay(day, 1))} data-testid="day-next" disabled={day >= today}><Icon name="chevron-right" /></IconButton>
+            <span className="hidden sm:block flex-1" />
+            {day !== today && <Button size="sm" variant="ghost" onClick={() => go(today)}>今日へ</Button>}
           </div>
-          <div className="grid grid-cols-[auto_6rem_auto] items-center gap-2">
-            <span className="text-xs text-label-2">可食部</span>
-            <Input inputMode="decimal" value={grams} onChange={(e) => setGrams(e.target.value)} onBlur={() => { const g = numOrNull(grams); if (g && g > 0 && g !== m.grams) choose(m.number, g); }} aria-label="可食部のグラム数" data-testid="table-grams" className="h-8" />
-            <span className="text-xs text-label-2">g{m.grams_estimated ? "（量からAIが見積もり。違えば直してください）" : ""}</span>
+          {weekDays.length > 0 && <WeekStrip days={weekDays} selected={day} target={targets.energy_kcal ?? null} onPick={go} />}
+        </div>
+
+        {d.error && <ErrorBanner message={d.error} onRetry={() => d.reload()} className="mb-0" />}
+        <DaySummary sum={sum} targets={targets} onTargets={() => setTargetsOpen(true)} loading={!ready} />
+        <QuickAdd foods={foods} sets={sets} dayLabel={label ?? mdLabel(day)} onText={(t) => log.addText(t, foods)} onFood={(f) => log.addFood(f)} onSet={(s: MealSet) => log.addSet(s)} onManage={() => setLibrary(true)} />
+
+        <section className="space-y-2" aria-label="記録">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <h3 className="font-semibold tracking-tight">記録<span className="text-label-2 font-normal text-sm ml-1.5 tabular">{ready ? `${entries.length}件` : ""}</span></h3>
+            {ready && entries.length > 0 && (
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => setSetFromDay(true)} data-testid="day-to-set">セットとして保存</Button>
+                <Button size="sm" variant="ghost" className="text-red" onClick={() => { if (confirm(`${label ?? mdLabel(day)}の記録をすべて削除しますか？`)) log.clearDay(); }} data-testid="day-clear">すべて削除</Button>
+              </div>
+            )}
           </div>
-          <div className="text-xs text-label-2 tabular">{fmtNum(m.nutrition.energy_kcal)} kcal・たんぱく質 {fmtNum(m.nutrition.protein_g, 1)}g・脂質 {fmtNum(m.nutrition.fat_g, 1)}g・炭水化物 {fmtNum(m.nutrition.carbs_g, 1)}g・食塩 {fmtNum(m.nutrition.salt_g, 1)}g</div>
-        </>
-      ) : !state.loading ? <p className="text-xs text-label-2">{state.note ?? "該当する食品が見つかりませんでした。"}</p> : null}
-      <div className="flex flex-wrap gap-1.5">
-        {state.candidates.filter((c) => c.number !== m?.number).slice(0, 4).map((c) => (
-          <button key={c.number} type="button" onClick={() => choose(c.number)} className="focus-ring rounded-full bg-fill px-2.5 py-1 text-xs text-label-2 hover:text-label max-w-full truncate" data-testid="table-candidate">{c.name}</button>
-        ))}
-        <button type="button" onClick={() => setOpen((v) => !v)} className="focus-ring rounded-full px-2.5 py-1 text-xs text-accent">{open ? "閉じる" : "別の食品を探す"}</button>
+          {ready ? (
+            <EntryList entries={entries} lookups={lookups} keyOf={log.keyOf} onOpen={(e) => setEditing({ kind: "entry", entry: e })} onDelete={log.removeEntry}
+              empty={<EmptyState title={`${label ?? mdLabel(day)}の記録はまだありません`} hint="上の欄に「ごはん 150g」のように入れるか、よく食べるもの・セットをタップして追加します。" />} />
+          ) : <Card padded={false} className="p-3 space-y-2" aria-busy="true"><Skeleton className="h-12" /><Skeleton className="h-12" /></Card>}
+          <p className="text-[0.6875rem] text-label-3 px-1">{TABLE_CREDIT}</p>
+        </section>
+
+        {!wide && (
+          <Card onClick={() => setChatOpen(true)} className="flex items-center gap-3" data-testid="meal-chat-open">
+            <span className="size-10 rounded-full bg-accent-soft text-accent grid place-items-center shrink-0"><Icon name="assistant" size={20} /></span>
+            <span className="flex-1 min-w-0"><span className="block font-medium">管理栄養士に相談</span><span className="block text-sm text-label-2 truncate">{[...chat.messages].reverse().find((m) => m.role === "assistant")?.content ?? "記録の追加や目標の変更も頼めます"}</span></span>
+            <Icon name="chevron-right" size={18} className="text-label-3" />
+          </Card>
+        )}
       </div>
-      {open && (
-        <div className="space-y-1.5">
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="成分表で検索（例: 鶏卵 ゆで）" autoFocus data-testid="table-search" className="h-9" />
-          <ul className="max-h-48 overflow-y-auto space-y-0.5">
-            {results.map((r) => <li key={r.number}><button type="button" onClick={() => choose(r.number)} className="w-full text-left rounded px-2 py-1.5 text-xs hover:bg-fill">{r.name}</button></li>)}
-          </ul>
+
+      {wide && (
+        <Card as="section" className="flex flex-col lg:sticky lg:top-20 self-start w-full">
+          <h2 className="text-lg font-semibold tracking-tight mb-2">管理栄養士に相談</h2>
+          {chatPanel("min(70dvh, 36rem)")}
+        </Card>
+      )}
+      {!wide && <Sheet open={chatOpen} onClose={() => setChatOpen(false)} title="管理栄養士に相談" testId="meal-chat-sheet">{chatPanel("min(72dvh, 40rem)")}</Sheet>}
+
+      <ItemSheet item={editable} onClose={() => setEditing(null)} onSave={saveEdit} onDelete={deleteEditing} lookup={editable ? lookups[editable.id] : undefined} />
+      <LibrarySheet open={library} onClose={() => setLibrary(false)} foods={foods} sets={sets} patch={log.patch} resolve={log.resolve} lookups={lookups}
+        onEditFood={(f) => setEditing({ kind: "food", food: f })} onEditItem={(m) => setEditing({ kind: "item", item: m })} />
+      <TargetsSheet open={targetsOpen} targets={targets} onClose={() => setTargetsOpen(false)} onSave={(t) => { setTargetsOpen(false); log.saveTargets(t); }} />
+      <SetFromDaySheet open={setFromDay} onClose={() => setSetFromDay(false)} entries={entries} onCreated={(s) => { log.patch((x) => ({ ...x, sets: [...x.sets, s] })); toast(`セット「${s.name}」を作りました`, "success"); }} />
+
+      {log.undo && (
+        <div className="fixed z-[55] left-1/2 -translate-x-1/2 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] md:bottom-6 popover flex items-center gap-3 pl-4 pr-2 py-1.5 text-sm" role="status" data-testid="undo-bar">
+          <span className="max-w-[14rem] truncate">「{log.undo.entry.food_name}」を削除しました</span>
+          <Button size="sm" variant="ghost" onClick={log.undoDelete} data-testid="undo-delete">元に戻す</Button>
         </div>
       )}
     </div>
   );
 }
 
-/* ---------------------------------------------------------------- modals */
-function NutritionFields({ n, setN }: { n: Record<string, string>; setN: (v: Record<string, string>) => void }) {
-  return (
-    <details className="rounded-[var(--radius-md)] bg-subtle p-3">
-      <summary className="text-sm font-medium cursor-pointer">栄養を手入力（成分表を使わない場合）</summary>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
-        {ALL_NUTRIENTS.map((x) => <NutrientInput key={x.key} def={x} n={n} setN={setN} />)}
-      </div>
-      <p className="text-xs text-label-3 mt-2">エネルギーはたんぱく質・脂質・炭水化物から自動で計算します（4・9・4 kcal/g。一部だけのときはエネルギーが空欄なら計算）。空欄のままなら成分表から計算します。手入力した値は記録値として扱い、確認なしに上書きしません。</p>
-    </details>
-  );
-}
-/** Energy from the typed P/F/C (same rule as the server). With requireAll (targets) all three must be set. */
-const pfcEnergy = (n: Record<string, string>, requireAll = false) => {
-  const v = ["protein_g", "fat_g", "carbs_g"].map((k) => numOrNull(n[k] ?? ""));
-  if (requireAll ? v.some((x) => x == null) : v.every((x) => x == null)) return null;
-  const [p, f, c] = v.map((x) => x ?? 0);
-  return Math.round(p * 4 + f * 9 + c * 4);
-};
-function NutrientInput({ def: x, n, setN, requireAll, placeholder }: { def: (typeof ALL_NUTRIENTS)[number]; n: Record<string, string>; setN: (v: Record<string, string>) => void; requireAll?: boolean; placeholder?: string }) {
-  const full = x.key === "energy_kcal" ? pfcEnergy(n, true) : null; // all of P/F/C → energy follows them
-  const partial = x.key === "energy_kcal" && full == null && !requireAll ? pfcEnergy(n) : null; // some → suggested when energy is empty
-  return <Field label={`${x.label} (${x.unit})${full != null ? "・自動" : ""}`}><Input inputMode="decimal" value={full != null ? String(full) : (n[x.key] ?? "")} readOnly={full != null} aria-readonly={full != null} className={full != null ? "opacity-70" : undefined} onChange={(e) => setN({ ...n, [x.key]: e.target.value })} placeholder={partial != null ? `${partial}（自動）` : placeholder} data-testid={`nutrient-${x.key}`} /></Field>;
-}
-const collectNutrition = (n: Record<string, string>, requireAll = false): Nutrition => {
-  const out: Nutrition = {};
-  for (const [k, v] of Object.entries(n)) { const x = numOrNull(v); if (x != null) out[k] = fromShown(k, x); }
-  const full = pfcEnergy(n, true), some = requireAll ? null : pfcEnergy(n);
-  if (full != null) out.energy_kcal = full; else if (out.energy_kcal == null && some != null) out.energy_kcal = some;
-  return out;
-};
-
-/** Log one item for a day; can pre-fill from a saved food and optionally save it as one. */
-function EntryModal({ entry, day, foods, onClose, onSaved }: { entry: Entry | "new" | null; day: string; foods: Food[]; onClose: () => void; onSaved: (res: DayRes, savedFood: boolean) => void }) {
-  const toast = useToast();
-  const [f, setF] = useState({ food_name: "", amount: "", unit: "", cost: "", servings: "1" });
-  const [n, setN] = useState<Record<string, string>>({});
-  const [save, setSave] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [tableValue, setTableValue] = useState<TableValue>(null);
-  const [fromFood, setFromFood] = useState<Food | null>(null);
-  const isEdit = entry && entry !== "new";
-  const manual = Object.values(n).some((v) => v.trim() !== "");
-  useEffect(() => {
-    if (isEdit) { setF({ food_name: entry.food_name, amount: entry.amount != null ? String(entry.amount) : "", unit: entry.unit ?? "", cost: entry.cost != null ? String(entry.cost) : "", servings: String(entry.servings) }); setN(Object.fromEntries(Object.entries(entry.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)]))); setSave(false); }
-    else { setF({ food_name: "", amount: "", unit: "", cost: "", servings: "1" }); setN({}); setSave(true); }
-    setTableValue(null); setFromFood(null);
-  }, [entry, isEdit]);
-  const pick = (name: string) => {
-    const src = foods.find((x) => x.name === name); if (!src) return;
-    setF((p) => ({ ...p, food_name: src.name, amount: src.amount != null ? String(src.amount) : "", unit: src.unit ?? "", cost: src.cost_per_serving != null ? String(src.cost_per_serving) : "" }));
-    // keep the saved food's own values (and their source) instead of looking it up again
-    setN(src.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(src.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)])) : {});
-    setFromFood(src); setSave(false);
-  };
-  const submit = async () => {
-    if (!f.food_name.trim()) return;
-    const nutrition = collectNutrition(n);
-    const body: Record<string, unknown> = { day, food_name: f.food_name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost: numOrNull(f.cost) };
-    if (Object.keys(nutrition).length) { body.nutrition = nutrition; body.nutrition_source = "recorded"; }
-    else if (fromFood && fromFood.name === f.food_name.trim() && fromFood.nutrition) { body.nutrition = fromFood.nutrition; body.nutrition_source = fromFood.nutrition_source; body.nutrition_ref = fromFood.nutrition_ref ? JSON.stringify(fromFood.nutrition_ref) : null; body.food_id = fromFood.id; }
-    else if (tableValue) { body.nutrition = tableValue.nutrition; body.nutrition_source = "table"; body.nutrition_ref = JSON.stringify(tableValue.ref); }
-    else if (isEdit) body.nutrition = null;
-    body.auto_nutrition = false; // the panel already did the lookup (or the user chose not to)
-    setSaving(true);
-    try {
-      const res = isEdit ? await api.put<DayRes>(`/health/meals/entries/${entry.id}`, body) : await api.post<DayRes>("/health/meals/entries", { ...body, servings: Number(f.servings) || 1, save_as_food: save });
-      toast(isEdit ? "保存しました" : "記録しました", "success"); onSaved(res, !isEdit && save);
-    } catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
-  };
-  return (
-    <Modal open={Boolean(entry)} onClose={onClose} title={isEdit ? "記録を編集" : "食べたものを記録"}
-      footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={submit} loading={saving} disabled={!f.food_name.trim()} data-testid="entry-save">{isEdit ? "保存" : "記録する"}</Button></>}>
-      <div className="space-y-3">
-        {!isEdit && foods.length > 0 && (
-          <Field label="よく食べるものから選ぶ"><Select value="" onChange={(e) => pick(e.target.value)} data-testid="entry-pick"><option value="">選択してください</option>{foods.map((x) => <option key={x.id} value={x.name}>{x.name}</option>)}</Select></Field>
-        )}
-        <Field label="食べたもの"><Input value={f.food_name} onChange={(e) => setF({ ...f, food_name: e.target.value })} placeholder="例: 鶏むね肉のサラダ" data-testid="entry-name" /></Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="量"><Input inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="150" /></Field>
-          <Field label="単位"><Input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} placeholder="g / 個 / 杯" /></Field>
-          <Field label="費用（円）" hint="未入力可"><Input inputMode="decimal" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} placeholder="未入力" data-testid="entry-cost" /></Field>
-        </div>
-        {!isEdit && (
-          <div className="grid grid-cols-2 gap-3 items-end">
-            <Field label="何回分" hint="2 なら栄養・費用も2倍"><Input inputMode="decimal" value={f.servings} onChange={(e) => setF({ ...f, servings: e.target.value })} data-testid="entry-servings" /></Field>
-            <label className="flex items-center gap-2 text-sm pb-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={save} onChange={(e) => setSave(e.target.checked)} data-testid="entry-save-food" />よく食べるものに登録</label>
-          </div>
-        )}
-        <TableLookup name={f.food_name} amount={f.amount} unit={f.unit} onChange={setTableValue} onGrams={(g) => setF((p) => ({ ...p, amount: String(g), unit: p.unit.trim() || "g" }))}
-          disabled={manual || Boolean(fromFood && fromFood.name === f.food_name.trim() && fromFood.nutrition)} />
-        <NutritionFields n={n} setN={setN} />
-        {manual && <p className="text-xs text-label-3">手入力した栄養値を使います（成分表の計算は使いません）。</p>}
-      </div>
-    </Modal>
-  );
-}
-
-function FoodModal({ food, onClose, onSaved }: { food: Food | "new" | null; onClose: () => void; onSaved: () => void }) {
-  const toast = useToast();
-  const [f, setF] = useState({ name: "", amount: "", unit: "", cost: "" });
-  const [n, setN] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [tableValue, setTableValue] = useState<TableValue>(null);
-  const isEdit = food && food !== "new";
-  // Only values the user typed by hand count as 記録; table / estimated values are recomputed.
-  const manual = Object.values(n).some((v) => v.trim() !== "");
-  useEffect(() => {
-    if (isEdit) { setF({ name: food.name, amount: food.amount != null ? String(food.amount) : "", unit: food.unit ?? "", cost: food.cost_per_serving != null ? String(food.cost_per_serving) : "" }); setN(food.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(food.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)])) : {}); }
-    else { setF({ name: "", amount: "", unit: "", cost: "" }); setN({}); }
-    setTableValue(null);
-  }, [food, isEdit]);
-  const submit = async () => {
-    if (!f.name.trim()) return;
-    const nutrition = collectNutrition(n);
-    const body: Record<string, unknown> = { name: f.name.trim(), amount: numOrNull(f.amount), unit: f.unit.trim() || null, cost_per_serving: numOrNull(f.cost), auto_nutrition: false };
-    if (Object.keys(nutrition).length) { body.nutrition = nutrition; body.nutrition_source = "recorded"; }
-    else if (tableValue) { body.nutrition = tableValue.nutrition; body.nutrition_source = "table"; body.nutrition_ref = JSON.stringify(tableValue.ref); }
-    // Editing with nothing typed and no table match: keep what is stored, except that clearing
-    // hand-entered (recorded) values means "remove them".
-    else if (isEdit && food.nutrition_source === "recorded") body.nutrition = null;
-    setSaving(true);
-    try { if (isEdit) await api.put(`/health/meals/foods/${food.id}`, body); else await api.post("/health/meals/foods", body); toast("保存しました", "success"); onSaved(); }
-    catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
-  };
-  const remove = async () => {
-    if (!isEdit || !confirm(`「${food.name}」を一覧から削除しますか？（過去の記録は残ります）`)) return;
-    try { await api.del(`/health/meals/foods/${food.id}`); toast("削除しました"); onSaved(); } catch (e: any) { toast(e?.message ?? "削除できませんでした", "error"); }
-  };
-  return (
-    <Modal open={Boolean(food)} onClose={onClose} title={isEdit ? "よく食べるものを編集" : "よく食べるものを追加"}
-      footer={<>{isEdit && <Button variant="danger" onClick={remove}>削除</Button>}<Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={submit} loading={saving} disabled={!f.name.trim()} data-testid="food-save">保存</Button></>}>
-      <div className="space-y-3">
-        <Field label="名前"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="例: ゆで卵" data-testid="food-name" /></Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="量"><Input inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="1" /></Field>
-          <Field label="単位"><Input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} placeholder="個" /></Field>
-          <Field label="1回分の費用（円）"><Input inputMode="decimal" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} placeholder="未入力" /></Field>
-        </div>
-        <TableLookup name={f.name} amount={f.amount} unit={f.unit} onChange={setTableValue} onGrams={(g) => setF((p) => ({ ...p, amount: String(g), unit: p.unit.trim() || "g" }))} disabled={manual} />
-        <NutritionFields n={n} setN={setN} />
-      </div>
-    </Modal>
-  );
-}
-
-function TargetsModal({ open, targets, onClose, onSaved }: { open: boolean; targets: Nutrition; onClose: () => void; onSaved: () => void }) {
-  const toast = useToast();
-  const [t, setT] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { if (open) setT(Object.fromEntries(Object.entries(targets).map(([k, v]) => [k, shownText(k, v)]))); }, [open, targets]);
-  const save = async () => {
-    setSaving(true);
-    try { await api.put("/health/targets", collectNutrition(t, true)); toast("目標を保存しました", "success"); onSaved(); }
-    catch (e: any) { toast(e?.message ?? "保存に失敗しました", "error"); } finally { setSaving(false); }
-  };
-  return (
-    <Modal open={open} onClose={onClose} title="1日の栄養目標" footer={<><Button onClick={onClose}>キャンセル</Button><Button variant="primary" onClick={save} loading={saving} data-testid="targets-save">保存</Button></>}>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {ALL_NUTRIENTS.map((x) => <NutrientInput key={x.key} def={x} n={t} setN={setT} requireAll placeholder="未設定" />)}
-      </div>
-    </Modal>
-  );
-}
-
-/** Manage the saved sets ("いつもの食事"): rename, add/remove members, delete. */
-function SetsModal({ open, sets, foods, onClose, onChanged }: { open: boolean; sets: MealSet[]; foods: Food[]; onClose: () => void; onChanged: () => void }) {
+function SetFromDaySheet({ open, onClose, entries, onCreated }: { open: boolean; onClose: () => void; entries: Entry[]; onCreated: (s: MealSet) => void }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const act = async (fn: () => Promise<unknown>, okMsg?: string) => {
+  const real = entries.filter((e) => !e.id.startsWith("tmp-"));
+  const submit = async () => {
+    const n = name.trim(); if (!n) return;
     setBusy(true);
-    try { await fn(); if (okMsg) toast(okMsg, "success"); onChanged(); }
-    catch (e: any) { toast(e?.message ?? "操作に失敗しました", "error"); } finally { setBusy(false); }
+    try { const r = await api.post<{ item: MealSet }>("/health/meals/sets", { name: n, entry_ids: real.map((e) => e.id) }); onCreated(r.item); setName(""); onClose(); }
+    catch (e: any) { toast(e?.message ?? "作成できませんでした", "error"); } finally { setBusy(false); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="いつもの食事（セット）" wide footer={<Button onClick={onClose}>閉じる</Button>}>
+    <Sheet open={open} onClose={onClose} title="この日の記録をセットにする">
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="セットの名前（例: いつもの朝食）" aria-label="セットの名前" data-autofocus data-testid="day-to-set-name" />
+        <ul className="text-sm text-label-2 space-y-0.5">{real.map((e) => <li key={e.id} className="truncate">{e.food_name}</li>)}</ul>
+        <div className="flex justify-end gap-2"><Button type="button" onClick={onClose}>キャンセル</Button><Button type="submit" variant="primary" loading={busy} disabled={!name.trim()} data-testid="day-to-set-save">セットを作成</Button></div>
+      </form>
+    </Sheet>
+  );
+}
+
+function MealSkeleton() {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_21rem] xl:grid-cols-[minmax(0,1fr)_24rem]" aria-busy="true" aria-label="読み込み中" data-testid="page-skeleton">
       <div className="space-y-4">
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) act(async () => { await api.post("/health/meals/sets", { name: name.trim() }); setName(""); }, "セットを作成しました"); }}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="新しいセット名（例: いつもの朝食）" data-testid="set-name" />
-          <Button type="submit" variant="primary" disabled={!name.trim() || busy} data-testid="set-create">作成</Button>
-        </form>
-        {sets.length === 0 && <EmptyState title="セットがありません" hint="よく食べる組み合わせをセットにすると、ボタンひとつでまとめて記録できます。" />}
-        {sets.map((s) => (
-          <div key={s.id} className="rounded-[var(--radius-lg)] bg-subtle p-3 space-y-2" data-testid="set-row">
-            <div className="flex items-center justify-between gap-2">
-              <input defaultValue={s.name} onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== s.name) act(async () => { await api.put(`/health/meals/sets/${s.id}`, { name: v }); }); }}
-                className="focus-ring bg-transparent font-medium rounded px-1 -mx-1 min-w-0 flex-1" aria-label={`${s.name}の名前`} />
-              <span className="text-xs text-label-2 tabular shrink-0">{s.items.length}品{s.nutrition.totals.energy_kcal != null ? `・${fmtNum(s.nutrition.totals.energy_kcal)}kcal` : ""}{s.cost.total != null ? `・${fmtYen(s.cost.total)}` : ""}</span>
-              <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (confirm(`「${s.name}」を削除しますか？`)) act(async () => { await api.del(`/health/meals/sets/${s.id}`); }, "削除しました"); }}>削除</Button>
-            </div>
-            <ul className="space-y-1">
-              {s.items.map((m) => (
-                <li key={m.id} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 min-w-0 truncate">{m.food_name}{m.amount != null && <span className="text-label-2 tabular"> {fmtNum(m.amount, 1)}{m.unit ?? ""}</span>}</span>
-                  <IconButton label={`${m.food_name}をセットから外す`} className="hover:text-red size-8 md:size-8" onClick={() => act(async () => { await api.del(`/health/meals/sets/${s.id}/items/${m.id}`); })}><Icon name="close" size={16} /></IconButton>
-                </li>
-              ))}
-              {s.items.length === 0 && <li className="text-xs text-label-3">まだ食品がありません。</li>}
-            </ul>
-            <Select value="" disabled={busy} onChange={(e) => { const fid = e.target.value; if (fid) act(async () => { await api.post(`/health/meals/sets/${s.id}/items`, { food_id: fid }); }); }} aria-label={`${s.name}に食品を追加`} data-testid="set-item-add">
-              <option value="">よく食べるものから追加…</option>
-              {foods.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </Select>
-          </div>
-        ))}
+        <Skeleton className="h-8 w-56" /><Skeleton className="h-16 w-full" />
+        <div className="card p-5 flex gap-5"><Skeleton className="size-[7.5rem] rounded-full" /><div className="flex-1 space-y-4 pt-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-full" /></div></div>
+        <div className="card p-5 space-y-3"><Skeleton className="h-12 w-full" /><div className="flex gap-2"><Skeleton className="h-9 w-24" /><Skeleton className="h-9 w-20" /><Skeleton className="h-9 w-28" /></div></div>
+        <div className="card p-3 space-y-2"><Skeleton className="h-12" /><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
       </div>
-    </Modal>
+      <div className={cx("hidden lg:block card p-5")}><Skeleton className="h-96 w-full" /></div>
+    </div>
   );
 }
