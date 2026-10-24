@@ -316,6 +316,7 @@ routes.post("/chat/:channel", async (c) => {
     const log = await dayLog(c.env, user.id, jstDate());
     const foods = await all<{ name: string; amount: number | null; unit: string | null }>(c.env.DB, "SELECT name,amount,unit FROM meal_foods WHERE user_id=? AND archived_at IS NULL ORDER BY use_count DESC LIMIT 30", user.id);
     roleText += "\n記録の追加・変更・削除や目標の変更を頼まれたときは、提案内容が返信の下にカードで表示され、利用者がボタンを押すと反映されます。例:「ゆで卵2個（約140kcal・たんぱく質12g）を今日の記録に追加する提案です。下のボタンで反映できます。」";
+    roleText += "\nビタミンDは利用者には IU で伝える（データの値は µg、1µg = 40IU）。";
     roleText += `\n今日の記録: ${JSON.stringify(log.entries.map((e) => ({ food_name: e.food_name, amount: e.amount, unit: e.unit, nutrition: e.nutrition })))}\n集計: ${JSON.stringify(log.summary.nutrition.totals)} partial=${log.summary.nutrition.partial}\n目標: ${JSON.stringify(log.summary.targets)}\nよく食べるもの: ${JSON.stringify(foods)}`;
   } else if (ch === "beauty") {
     const items = await all(c.env.DB, "SELECT name,product,timing,purpose FROM beauty_routines WHERE user_id=?", user.id);
@@ -339,6 +340,7 @@ routes.post("/chat/:channel", async (c) => {
           '      {"op":"update","id":既存ID,"changes":{"food_name"?,"amount"?,"unit"?,"cost"?,"nutrition"?}}',
           '      {"op":"remove","id":既存ID}',
           'entries は「今日食べた記録」への操作です。save_as_food は「よく食べるもの」にも登録する場合 true。',
+          "値の単位はキー末尾のとおり（_ug は µg）。ビタミンDを IU で言われたら 40 で割って µg にする（例: 1000IU → 25）。",
           `栄養キーは ${NUTRIENT_KEYS.join(", ")}。今日の記録(ID付き): ${JSON.stringify(existing.map((m) => ({ id: m.id, food_name: m.food_name, amount: m.amount, unit: m.unit })))}`,
           '変更がなければ {"targets": null, "entries": []}。',
         ].join("\n") },

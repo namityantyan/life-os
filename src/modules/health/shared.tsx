@@ -6,17 +6,23 @@ import { fmtNum } from "@/lib/api";
 export type Nutrition = Record<string, number>;
 export type ChatItem = import("@/components/ui").ChatMsg & { id?: string; proposal?: any; applied?: Record<string, unknown> | null };
 
-export const MAIN_NUTRIENTS: { key: string; label: string; unit: string }[] = [
+export type NutrientDef = { key: string; label: string; unit: string; factor?: number };
+export const MAIN_NUTRIENTS: NutrientDef[] = [
   { key: "energy_kcal", label: "エネルギー", unit: "kcal" }, { key: "protein_g", label: "たんぱく質", unit: "g" }, { key: "fat_g", label: "脂質", unit: "g" },
   { key: "carbs_g", label: "炭水化物", unit: "g" }, { key: "fiber_g", label: "食物繊維", unit: "g" }, { key: "salt_g", label: "食塩相当量", unit: "g" },
 ];
-export const EXTRA_NUTRIENTS: { key: string; label: string; unit: string }[] = [
+export const EXTRA_NUTRIENTS: NutrientDef[] = [
   { key: "calcium_mg", label: "カルシウム", unit: "mg" }, { key: "iron_mg", label: "鉄", unit: "mg" }, { key: "magnesium_mg", label: "マグネシウム", unit: "mg" }, { key: "zinc_mg", label: "亜鉛", unit: "mg" }, { key: "potassium_mg", label: "カリウム", unit: "mg" },
   { key: "vitamin_a_ug", label: "ビタミンA", unit: "µg" }, { key: "vitamin_b1_mg", label: "ビタミンB1", unit: "mg" }, { key: "vitamin_b2_mg", label: "ビタミンB2", unit: "mg" }, { key: "vitamin_b6_mg", label: "ビタミンB6", unit: "mg" }, { key: "vitamin_b12_ug", label: "ビタミンB12", unit: "µg" },
-  { key: "vitamin_c_mg", label: "ビタミンC", unit: "mg" }, { key: "vitamin_d_ug", label: "ビタミンD", unit: "µg" }, { key: "vitamin_e_mg", label: "ビタミンE", unit: "mg" }, { key: "folate_ug", label: "葉酸", unit: "µg" },
+  { key: "vitamin_c_mg", label: "ビタミンC", unit: "mg" }, { key: "vitamin_d_ug", label: "ビタミンD", unit: "IU", factor: 40 }, { key: "vitamin_e_mg", label: "ビタミンE", unit: "mg" }, { key: "folate_ug", label: "葉酸", unit: "µg" },
 ];
 export const ALL_NUTRIENTS = [...MAIN_NUTRIENTS, ...EXTRA_NUTRIENTS];
 export const nutrientLabel = (k: string) => ALL_NUTRIENTS.find((n) => n.key === k) ?? { key: k, label: k, unit: "" };
+/** Values are stored in the 成分表 unit (vitamin D: µg); some are shown in another unit (vitamin D: IU, 1 µg = 40 IU). */
+const factorOf = (k: string) => ALL_NUTRIENTS.find((n) => n.key === k)?.factor ?? 1;
+export const toShown = (k: string, v: number) => v * factorOf(k);
+export const fromShown = (k: string, v: number) => v / factorOf(k);
+export const shownText = (k: string, v: number) => String(Math.round(toShown(k, v) * 100) / 100);
 export const numOrNull = (v: string) => { const t = v.trim(); if (!t) return null; const n = Number(t); return Number.isFinite(n) ? n : null; };
 
 export function NutrientBar({ label, unit, value, target, partial }: { label: string; unit: string; value: number | null; target: number | null; partial: boolean }) {

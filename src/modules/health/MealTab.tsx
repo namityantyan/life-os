@@ -10,7 +10,7 @@ import {
   PageSkeleton, Section, Select, Stagger, cx, useToast, type ChatMsg,
 } from "@/components/ui";
 import { api, useApi, fmtNum, fmtYen, fmtDate, todayJst } from "@/lib/api";
-import { ALL_NUTRIENTS, EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, nutrientLabel, numOrNull, type ChatItem, type Nutrition } from "./shared";
+import { ALL_NUTRIENTS, EXTRA_NUTRIENTS, MAIN_NUTRIENTS, NutrientBar, fromShown, nutrientLabel, numOrNull, shownText, toShown, type ChatItem, type Nutrition } from "./shared";
 
 type TableRef = { number: string; name: string; grams: number; grams_estimated?: boolean };
 type Food = { id: string; name: string; amount: number | null; unit: string | null; nutrition: Nutrition | null; nutrition_source: string | null; nutrition_ref: TableRef | null; cost_per_serving: number | null; use_count: number };
@@ -146,7 +146,7 @@ export function MealTab() {
           </div>
           {item_count === 0 ? <p className="text-sm text-label-3">まだ記録がありません。下のボタンから追加できます。</p> : (
             <div className="space-y-2">
-              {(showExtra ? ALL_NUTRIENTS : MAIN_NUTRIENTS).map((n) => <NutrientBar key={n.key} label={n.label} unit={n.unit} value={totals[n.key] ?? null} target={targets[n.key] ?? null} partial={partial} />)}
+              {(showExtra ? ALL_NUTRIENTS : MAIN_NUTRIENTS).map((n) => <NutrientBar key={n.key} label={n.label} unit={n.unit} value={totals[n.key] != null ? toShown(n.key, totals[n.key]!) : null} target={targets[n.key] != null ? toShown(n.key, targets[n.key]) : null} partial={partial} />)}
               <Button size="sm" variant="ghost" aria-expanded={showExtra} onClick={() => setShowExtra((v) => !v)}>{showExtra ? "主要項目だけ表示" : "ミネラル・ビタミンも表示"}</Button>
               {partial && <p className="text-xs text-label-2">栄養が未計算の記録があるため、合計は途中の値です。不足・過剰は断定しません。</p>}
             </div>
@@ -335,7 +335,7 @@ function ProposalCard({ item, entries, targets, day, onApplied }: {
           <label className="flex items-center gap-2"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={useTargets} disabled={!!applied || busy} onChange={(e) => setUseTargets(e.target.checked)} aria-label="目標値を変更する" /><Badge tone="purple">目標</Badge><span>1日の目標値を変更</span></label>
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 gap-y-0.5 pl-6 text-xs tabular" data-testid="meal-proposal-targets">
             {targetRows.map(([k, v]) => { const n = nutrientLabel(k); return (
-              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(targets[k], 1) : "未設定"}</span><Icon name="arrow-right" size={14} className="text-label-3 self-center" title="から" /><span className="text-right font-medium">{fmtNum(v, 1)}{n.unit}</span></div>
+              <div key={k} className="contents"><span className="text-label-2">{n.label}</span><span className="text-right text-label-3">{targets[k] != null ? fmtNum(toShown(k, targets[k]), 1) : "未設定"}</span><Icon name="arrow-right" size={14} className="text-label-3 self-center" title="から" /><span className="text-right font-medium">{fmtNum(toShown(k, v), 1)}{n.unit}</span></div>
             ); })}
           </div>
         </div>
@@ -451,7 +451,7 @@ function NutritionFields({ n, setN }: { n: Record<string, string>; setN: (v: Rec
 }
 const collectNutrition = (n: Record<string, string>): Nutrition => {
   const out: Nutrition = {};
-  for (const [k, v] of Object.entries(n)) { const x = numOrNull(v); if (x != null) out[k] = x; }
+  for (const [k, v] of Object.entries(n)) { const x = numOrNull(v); if (x != null) out[k] = fromShown(k, x); }
   return out;
 };
 
@@ -467,7 +467,7 @@ function EntryModal({ entry, day, foods, onClose, onSaved }: { entry: Entry | "n
   const isEdit = entry && entry !== "new";
   const manual = Object.values(n).some((v) => v.trim() !== "");
   useEffect(() => {
-    if (isEdit) { setF({ food_name: entry.food_name, amount: entry.amount != null ? String(entry.amount) : "", unit: entry.unit ?? "", cost: entry.cost != null ? String(entry.cost) : "", servings: String(entry.servings) }); setN(Object.fromEntries(Object.entries(entry.nutrition ?? {}).map(([k, v]) => [k, String(v)]))); setSave(false); }
+    if (isEdit) { setF({ food_name: entry.food_name, amount: entry.amount != null ? String(entry.amount) : "", unit: entry.unit ?? "", cost: entry.cost != null ? String(entry.cost) : "", servings: String(entry.servings) }); setN(Object.fromEntries(Object.entries(entry.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)]))); setSave(false); }
     else { setF({ food_name: "", amount: "", unit: "", cost: "", servings: "1" }); setN({}); setSave(true); }
     setTableValue(null); setFromFood(null);
   }, [entry, isEdit]);
@@ -475,7 +475,7 @@ function EntryModal({ entry, day, foods, onClose, onSaved }: { entry: Entry | "n
     const src = foods.find((x) => x.name === name); if (!src) return;
     setF((p) => ({ ...p, food_name: src.name, amount: src.amount != null ? String(src.amount) : "", unit: src.unit ?? "", cost: src.cost_per_serving != null ? String(src.cost_per_serving) : "" }));
     // keep the saved food's own values (and their source) instead of looking it up again
-    setN(src.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(src.nutrition ?? {}).map(([k, v]) => [k, String(v)])) : {});
+    setN(src.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(src.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)])) : {});
     setFromFood(src); setSave(false);
   };
   const submit = async () => {
@@ -531,7 +531,7 @@ function FoodModal({ food, onClose, onSaved }: { food: Food | "new" | null; onCl
   // Only values the user typed by hand count as 記録; table / estimated values are recomputed.
   const manual = Object.values(n).some((v) => v.trim() !== "");
   useEffect(() => {
-    if (isEdit) { setF({ name: food.name, amount: food.amount != null ? String(food.amount) : "", unit: food.unit ?? "", cost: food.cost_per_serving != null ? String(food.cost_per_serving) : "" }); setN(food.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(food.nutrition ?? {}).map(([k, v]) => [k, String(v)])) : {}); }
+    if (isEdit) { setF({ name: food.name, amount: food.amount != null ? String(food.amount) : "", unit: food.unit ?? "", cost: food.cost_per_serving != null ? String(food.cost_per_serving) : "" }); setN(food.nutrition_source === "recorded" ? Object.fromEntries(Object.entries(food.nutrition ?? {}).map(([k, v]) => [k, shownText(k, v)])) : {}); }
     else { setF({ name: "", amount: "", unit: "", cost: "" }); setN({}); }
     setTableValue(null);
   }, [food, isEdit]);
@@ -573,7 +573,7 @@ function TargetsModal({ open, targets, onClose, onSaved }: { open: boolean; targ
   const toast = useToast();
   const [t, setT] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  useEffect(() => { if (open) setT(Object.fromEntries(Object.entries(targets).map(([k, v]) => [k, String(v)]))); }, [open, targets]);
+  useEffect(() => { if (open) setT(Object.fromEntries(Object.entries(targets).map(([k, v]) => [k, shownText(k, v)]))); }, [open, targets]);
   const save = async () => {
     setSaving(true);
     try { await api.put("/health/targets", collectNutrition(t)); toast("目標を保存しました", "success"); onSaved(); }

@@ -42,8 +42,19 @@ const ctx = { waitUntil(p: Promise<unknown>) { const q = Promise.resolve(p).catc
 const isApi = (p: string) => p === "/api" || p.startsWith("/api/");
 serve({
   port: Number(process.env.PORT ?? 8791), hostname: process.env.BIND ?? "127.0.0.1",
-  fetch: async (req) => { const p = new URL(req.url).pathname; return isApi(p) ? compressResponse(await worker.fetch(req, env, ctx), req.headers.get("Accept-Encoding")) : assets.fetch(req); },
+  fetch: async (req) => {
+    const p = new URL(req.url).pathname;
+    if (!isApi(p)) return assets.fetch(req);
+    const t0 = performance.now();
+    const res = compressResponse(await worker.fetch(req, env, ctx), req.headers.get("Accept-Encoding"));
+    const ms = Math.round(performance.now() - t0);
+    if (ms > 1000) console.warn(`slow ${req.method} ${p} ${res.status} ${ms}ms`);
+    return res;
+  },
 });
+// Event-loop stalls (synchronous work blocking every request) show up here.
+let lagAt = performance.now();
+setInterval(() => { const lag = performance.now() - lagAt - 1000; if (lag > 250) console.warn(`event loop blocked ${Math.round(lag)}ms`); lagAt = performance.now(); }, 1000).unref();
 console.log(`lifeos listening on ${process.env.BIND ?? "127.0.0.1"}:${process.env.PORT ?? 8791}`);
 
 // Cron triggers from wrangler.jsonc, evaluated every minute (UTC), plus KV TTL sweep and a daily SQLite backup.
