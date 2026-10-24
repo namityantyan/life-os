@@ -7,7 +7,7 @@ import { D1Shim, migrate } from "../../hub/d1";
 import { dirImageStore } from "../../server/shims";
 import type { AppEnv, Env } from "../../worker/env";
 import { routes, syncPendingImages } from "../../worker/modules/images/routes";
-import { guardText, hasTerm, normalizeTags, parseConversion, decideRating, looksLikeTags, clampCount, refuseMessage, serviceError, systemPromptFor, IMAGE_SYSTEM_PROMPT, PHOTO_SYSTEM_PROMPT } from "../../worker/modules/images/logic";
+import { guardText, hasTerm, normalizeTags, parseConversion, decideRating, looksLikeTags, clampCount, refuseMessage, serviceError, systemPromptFor, photoAdultTags, photoR18YouthHit, IMAGE_SYSTEM_PROMPT, PHOTO_SYSTEM_PROMPT, PHOTO_R18_SYSTEM_PROMPT } from "../../worker/modules/images/logic";
 
 describe("images guard", () => {
   it("refuses minor terms always (same list as the service)", () => {
@@ -288,11 +288,13 @@ describe("image_input refusals from the AI", () => {
 /* ---------- photo model (RealVisXL V5.0) ---------- */
 
 describe("photo model: guard, prompt and tags", () => {
-  it("is all-ages only and strict about real people; anime is unchanged", () => {
-    const r = guardText("a woman in a park", "r18", "photo");
-    expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.code).toBe("photo_r18"); expect(r.message).toContain("全年齢"); }
-    expect(guardText("R18の実写の女性", "all_ages", "photo").ok).toBe(false);
+  it("all-ages refuses sexual words (pointing to R18); r18 allows an adult request; strict about real people; anime is unchanged", () => {
+    expect(guardText("a woman in a park", "r18", "photo").ok).toBe(true);
+    expect(guardText("大人の女性がベッドで横になっている、ヌード", "r18", "photo").ok).toBe(true);
+    expect(guardText("an adult woman, nude, 28 years old", "r18", "photo").ok).toBe(true);
+    const a = guardText("R18の実写の女性", "all_ages", "photo");
+    expect(a.ok).toBe(false);
+    if (!a.ok) { expect(a.code).toBe("photo_adult"); expect(a.message).toContain("R18"); }
     expect(guardText("woman in lingerie", "all_ages", "photo").ok).toBe(false);
     expect(guardText("1girl, mature female, lingerie", "r18", "anime").ok).toBe(true);
     for (const t of ["芸能人の写真", "有名な女優そっくりの顔", "a celebrity on the red carpet", "a woman who looks like a famous singer", "deepfake of my boss"]) {
@@ -305,6 +307,36 @@ describe("photo model: guard, prompt and tags", () => {
     expect(guardText("a man fixing a factor in the workshop", "all_ages", "photo").ok).toBe(true);
     expect(guardText("小学生の女の子", "all_ages", "photo").ok).toBe(false);
   });
+  it("photo r18 refuses every age / youth / school word (JP and EN) and stated ages under 20", () => {
+    for (const t of ["少女のヌード", "女子高生", "JKの写真", "学生の女性", "制服の女性", "ロリ", "幼い顔の女性", "若く見える女性", "小柄な女性", "童顔の女性", "10代の女性", "17歳の女性",
+      "a teen woman", "teenager", "schoolgirl", "a woman in school uniform", "a petite woman", "young-looking woman", "youthful face", "a 16 years old woman", "a woman, 15yo", "high school classroom", "student"]) {
+      const r = guardText(t, "r18", "photo");
+      expect(r.ok, t).toBe(false);
+      if (!r.ok) { expect(r.code, t).toBe("minor"); }
+    }
+    const r = guardText("制服の女性", "r18", "photo");
+    if (!r.ok) expect(r.message).toContain("実写のR18は大人");
+    expect(photoR18YouthHit("a woman, 25 years old")).toBeNull();
+    expect(photoR18YouthHit("25歳の女性")).toBeNull();
+    expect(photoR18YouthHit("１７歳")).toBe("17歳");
+    // the same words stay fine for photo all-ages (no sexual content) and for anime
+    expect(guardText("制服の女性がカフェで働いている", "all_ages", "photo").ok).toBe(true);
+    expect(guardText("a woman, 25 years old, school uniform", "all_ages", "anime").ok).toBe(true);
+  });
+  it("photo r18 still refuses real people and lookalikes", () => {
+    for (const t of ["芸能人のヌード", "女優そっくりの女性", "〇〇に似た女性", "a woman who looks like a celebrity", "deepfake nude"]) {
+      const r = guardText(t, "r18", "photo");
+      expect(r.ok, t).toBe(false);
+      if (!r.ok) expect(r.code, t).toBe("real_person");
+    }
+  });
+  it("photo r18 rewrites girl/boy to woman/man (gender kept) and drops young", () => {
+    expect(photoAdultTags("1girl, solo, nude, on bed")).toBe("a woman, solo, nude, on bed");
+    expect(photoAdultTags("1boy, 1girl, kissing")).toBe("a man, a woman, kissing");
+    expect(photoAdultTags("2girls, girl, Girls, boy, boys")).toBe("2 women, woman, women, man, men");
+    expect(photoAdultTags("a young woman lying on a bed, girlfriend")).toBe("a woman lying on a bed, girlfriend");
+    expect(photoAdultTags("sunset beach")).toBe("sunset beach");
+  });
   it("uses a separate conversion prompt and drops the photo-quality words the service adds", () => {
     expect(systemPromptFor("anime")).toBe(IMAGE_SYSTEM_PROMPT);
     expect(systemPromptFor("photo")).toBe(PHOTO_SYSTEM_PROMPT);
@@ -314,8 +346,14 @@ describe("photo model: guard, prompt and tags", () => {
     expect(PHOTO_SYSTEM_PROMPT).toContain("「実写」「写真風」「リアル」などの画風の指定はこれに当たらない");
     expect(normalizeTags("a woman in a park, Photorealistic, RAW photo, 8k, masterpiece, soft light", "photo")).toBe("a woman in a park, soft light");
     expect(normalizeTags("1girl, realistic", "anime")).toBe("1girl, realistic");
-    expect(parseConversion({ refuse: null, tags: "a woman", rating: "r18" }, "photo")!.rating).toBe("all_ages");
-    expect(refuseMessage("adult")).toContain("全年齢");
+    expect(systemPromptFor("photo", "all_ages")).toBe(PHOTO_SYSTEM_PROMPT);
+    expect(systemPromptFor("photo", "r18")).toBe(PHOTO_R18_SYSTEM_PROMPT);
+    expect(systemPromptFor("anime", "r18")).toBe(IMAGE_SYSTEM_PROMPT);
+    expect(PHOTO_R18_SYSTEM_PROMPT).toContain("女性は \"woman\"、男性は \"man\" と書き");
+    expect(PHOTO_R18_SYSTEM_PROMPT).toContain("\"girl\", \"boy\", \"1girl\"");
+    expect(PHOTO_R18_SYSTEM_PROMPT).toContain("\"real_person\"");
+    expect(PHOTO_R18_SYSTEM_PROMPT).toContain("女子高生・JK");
+    expect(refuseMessage("adult")).toContain("R18");
   });
 });
 
@@ -347,21 +385,53 @@ describe("photo model routes", () => {
     expect(calls.filter((c) => c.url === "/v1/generate")[1]!.body.model).toBe("anime");
   });
 
-  it("refuses r18 for photo before calling the AI or the Mac", async () => {
-    for (const body of [{ text: "大人の女性", model: "photo", rating: "r18" }, { text: "R18で大人の女性", model: "photo" }]) {
+  it("photo r18: allowed for an adult request with rating r18, uses the r18 prompt and rewrites girl to woman", async () => {
+    const t = setup({ ai: { refuse: null, reason: "", tags: "1girl, an adult woman lying on a bed, nude, soft window light", rating: "r18", count: null } });
+    svc.health = healthWith({ anime: true, photo: true });
+    const r = await t.post("/generate", { text: "ベッドに横たわる大人の女性、ヌード", model: "photo", rating: "r18" });
+    expect(r.status).toBe(201);
+    const { item } = await r.json();
+    expect(item).toMatchObject({ model: "photo", rating: "r18", tags: "a woman, an adult woman lying on a bed, nude, soft window light" });
+    expect(calls.find((c) => c.url === "/v1/generate")!.body).toMatchObject({ model: "photo", rating: "r18", prompt: "a woman, an adult woman lying on a bed, nude, soft window light" });
+    const sys = (t.ai!.run as any).mock.calls[0][1].messages[0].content as string;
+    expect(sys).toBe(PHOTO_R18_SYSTEM_PROMPT);
+  });
+
+  it("photo r18 is never inferred: adult words without rating r18 are refused, pointing to R18", async () => {
+    for (const body of [{ text: "R18で大人の女性", model: "photo" }, { text: "大人の女性のヌード", model: "photo", rating: "all_ages" }]) {
       calls = [];
-      const t = setup({ ai: photoAi });
+      const t = setup({ ai: { ...photoAi, rating: "r18" } });
       const r = await t.post("/generate", body);
       expect(r.status).toBe(422);
-      expect((await r.json()).error).toContain("実写モデルは全年齢のみ");
+      expect((await r.json()).error).toContain("「R18」を選んでください");
       expect(t.ai!.run).not.toHaveBeenCalled();
       expect(calls).toHaveLength(0);
     }
   });
 
+  it("photo r18 refuses youth / school / real-person words before the AI, and in the converted tags", async () => {
+    for (const text of ["女子高生のヌード", "制服の女性", "若く見える小柄な女性", "17歳の女性", "a teen woman nude", "芸能人そっくりの女性"]) {
+      calls = [];
+      const t = setup({ ai: photoAi });
+      const r = await t.post("/generate", { text, model: "photo", rating: "r18" });
+      expect(r.status, text).toBe(422);
+      expect(t.ai!.run).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+    }
+    for (const tags of ["a woman in a school uniform, nude", "a teenage woman", "a woman who looks like a celebrity"]) {
+      calls = [];
+      const t = setup({ ai: { refuse: null, reason: "", tags, rating: "r18", count: null } });
+      svc.health = healthWith({ anime: true, photo: true });
+      expect((await t.post("/generate", { text: "大人の女性", model: "photo", rating: "r18" })).status, tags).toBe(422);
+      expect(calls.some((c) => c.url === "/v1/generate")).toBe(false);
+    }
+    const t = setup({ ai: { refuse: "minor", reason: "", tags: "", rating: "r18", count: null } });
+    expect((await t.post("/generate", { text: "あどけない女性", model: "photo", rating: "r18" })).status).toBe(422);
+  });
+
   it("refuses the AI's adult verdict and real-person words in the converted text", async () => {
     let t = setup({ ai: { refuse: "adult", reason: "", tags: "", rating: "all_ages", count: null } });
-    expect((await (await t.post("/generate", { text: "きわどい水着の女性", model: "photo" })).json()).error).toContain("全年齢");
+    expect((await (await t.post("/generate", { text: "きわどい水着の女性", model: "photo" })).json()).error).toContain("R18");
     t = setup({ ai: { ...photoAi, tags: "a celebrity smiling" } });
     svc.health = healthWith({ anime: true, photo: true });
     expect((await t.post("/generate", { text: "笑顔の女性", model: "photo" })).status).toBe(422);

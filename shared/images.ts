@@ -5,12 +5,17 @@ export type ImageRating = (typeof IMAGE_RATINGS)[number];
 export const IMAGE_RATING_LABELS: Record<ImageRating, string> = { all_ages: "全年齢", r18: "R18" };
 export const IMAGE_COUNT_MAX = 4;
 
-/** Which checkpoint the Mac uses: anime = Animagine XL 4.0 (default), photo = RealVisXL V5.0 (photoreal, all-ages only). */
+/** Which checkpoint the Mac uses: anime = Animagine XL 4.0 (default), photo = RealVisXL V5.0 (photoreal).
+ *  Photo r18 is allowed only when chosen explicitly, adults only (adult positives + minor-avoidance negatives on the Mac,
+ *  youth/school/age words refused), and real people are refused for photo at every rating. */
 export const IMAGE_MODELS = ["anime", "photo"] as const;
 export type ImageModel = (typeof IMAGE_MODELS)[number];
 export const IMAGE_MODEL_LABELS: Record<ImageModel, string> = { anime: "アニメ", photo: "実写" };
 export const asImageModel = (v: unknown): ImageModel => (v === "photo" ? "photo" : "anime");
-export const PHOTO_R18_MESSAGE = "実写モデルは全年齢のみです。R18・成人向けの実写は生成できません（アニメを選んでください）。";
+/** Photo + all-ages + sexual / adult words. */
+export const PHOTO_ADULT_NEEDS_R18_MESSAGE = "実写の全年齢では性的・成人向けの表現は生成できません。成人向けにするときは区分で「R18」を選んでください。";
+/** Photo + r18 + an age / youth / school word. */
+export const PHOTO_R18_YOUTH_MESSAGE = "実写のR18は大人（成人）だけです。年齢・学生・制服・幼さを示す言葉は使えません。";
 
 export type ImageGenStatus = "queued" | "running" | "done" | "error";
 export const IMAGE_STATUS_LABELS: Record<ImageGenStatus, string> = { queued: "待機中", running: "生成中", done: "完了", error: "失敗" };

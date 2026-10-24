@@ -11,7 +11,9 @@ Life OS 自宅Mac版（life-os/imggen-home/app/）: ai-image-business/scripts/im
 変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）と設定ファイル名（config.env）と、
 実写モデルの追加（POST /v1/generate の "model": "anime"（既定）| "photo"、/v1/health の "models"）。
 認証・§0 安全ガード・API 契約は元のまま（model を省いた要求は従来どおり anime）。
-実写は全年齢のみ（r18 は 422）で、check_photo_prompt_safety も追加で通す。起動は bin/service.zsh（launchd: com.lifeos.imggen-svc）。
+実写は check_photo_prompt_safety(prompt, rating) も追加で通す（実在人物はどの区分でも 422、
+全年齢は性的な語が 422、R18 は年齢・学生・幼さを示す語が 422。R18 の大人の年齢ポジティブと
+未成年回避ネガティブは generate.py が必ず付ける）。起動は bin/service.zsh（launchd: com.lifeos.imggen-svc）。
 """
 from __future__ import annotations
 
@@ -51,7 +53,6 @@ PHOTO_MODEL_PATH = Path(os.getenv(
     "IMGGEN_PHOTO_MODEL_PATH",
     str(ROOT / "models" / "checkpoints" / "RealVisXL_V5.0_fp16.safetensors")))
 MODEL_PATHS = {"anime": MODEL_PATH, "photo": PHOTO_MODEL_PATH}
-PHOTO_R18_MESSAGE = "実写モデルは全年齢のみです。R18・成人向けの実写は生成できません（アニメを選んでください）。"
 COMFY_HOST, COMFY_PORT = "127.0.0.1", 8188
 
 TOKEN = os.getenv("IMGGEN_TOKEN", "")
@@ -155,15 +156,13 @@ async def generate(req: GenReq, wait: bool = Query(default=False),
         raise HTTPException(422, detail={"error": "bad_request", "message": "res は WxH 形式"})
     if req.model not in MODEL_PATHS:
         raise HTTPException(422, detail={"error": "bad_request", "message": "model は anime|photo"})
-    if req.model == "photo" and req.rating != "all_ages":
-        raise HTTPException(422, detail={"error": "photo_r18", "message": PHOTO_R18_MESSAGE})
 
     # §0 安全ガード（サービス側で強制。どのモデルでも同じ）
     ok, msg = check_prompt_safety(req.prompt)
     if not ok:
         raise HTTPException(422, detail={"error": "banned_term", "message": msg})
     if req.model == "photo":
-        ok, msg = check_photo_prompt_safety(req.prompt)
+        ok, msg = check_photo_prompt_safety(req.prompt, req.rating)
         if not ok:
             raise HTTPException(422, detail={"error": "banned_term", "message": msg})
 

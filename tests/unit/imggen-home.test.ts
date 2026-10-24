@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { unzipSync, strFromU8 } from "fflate";
 import { Hono } from "hono";
 import type { AppEnv, Env } from "../../worker/env";
@@ -104,7 +105,7 @@ describe("imggen-home sources", () => {
     expect(readFileSync(join(root, "app/generate.py"), "utf8")).toContain("MINOR_AVOID_NEGATIVE = \"child, loli, shota");
   });
 
-  it("add the photo model: pinned download, all-ages only, safety on both models, upgrade-in-place setup", () => {
+  it("add the photo model: pinned download, adult-only r18, safety on both models, upgrade-in-place setup", () => {
     const rd = (p: string) => readFileSync(join(root, p), "utf8");
     const common = rd("lib/common.zsh");
     expect(common).toContain("PHOTO_MODEL_URL=\"${LIFEOS_IMGGEN_PHOTO_MODEL_URL:-https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc/RealVisXL_V5.0_fp16.safetensors}\"");
@@ -118,8 +119,9 @@ describe("imggen-home sources", () => {
     expect(gen).toContain("ap.add_argument(\"--model\", default=\"anime\"");
     const svc = rd("app/imggen_service.py");
     expect(svc).toContain("model: str = \"anime\"");
-    expect(svc).toContain("if req.model == \"photo\" and req.rating != \"all_ages\":");
-    expect(svc).toContain("ok, msg = check_photo_prompt_safety(req.prompt)");
+    expect(svc).not.toContain("PHOTO_R18_MESSAGE");
+    expect(svc).toContain("ok, msg = check_photo_prompt_safety(req.prompt, req.rating)");
+    expect(gen).toContain("check_photo_prompt_safety(args.prompt, args.rating)");
     expect(svc).toContain("\"models\": {m: _model_ready(m) for m in MODEL_PATHS}");
     expect(rd("bin/service.zsh")).toContain("IMGGEN_PHOTO_MODEL_PATH=\"$PREFIX/models/checkpoints/RealVisXL_V5.0_fp16.safetensors\"");
     const setup = rd("LifeOS-画像生成-セットアップ.command");
@@ -167,5 +169,49 @@ describe("GET /api/images/home-installer", () => {
       expect(b.error).toMatch(/[ぁ-んァ-ン]/);
       expect(b.error).not.toContain(TOKEN);
     }
+  });
+});
+
+/** Runs the vendored Python (stdlib only at import time) to check the photo policy end to end. */
+describe("imggen-home photo r18 policy (Python)", () => {
+  const app = join(__dirname, "../../imggen-home/app");
+  const py = (code: string) => JSON.parse(execFileSync("python3", ["-I", "-B", "-c", `import sys, json; sys.path.insert(0, ${JSON.stringify(app)})\n${code}`], { encoding: "utf8" }));
+  it("photo r18 preset: adult positives first (gender kept), strong minor negatives, no NSFW-avoidance; all-ages unchanged", () => {
+    const r = py(`import generate as g
+p = g.PHOTO_PRESETS["photo"]
+out = {k: g.build_prompts("photo", "r18", t, p) for k, t in {"girl": "1girl, lying on a bed, nude", "both": "a young man and a woman kissing", "none": "sunset beach"}.items()}
+out["all"] = g.build_prompts("photo", "all_ages", "a woman in a park", p)
+print(json.dumps(out))`);
+    expect(r.girl[0]).toMatch(/^adult woman, mature adult, 25 years old, adult body proportions, a woman, lying on a bed, nude, RAW photo/);
+    expect(r.girl[0]).not.toMatch(/\bgirl\b|1girl/);
+    expect(r.both[0]).toMatch(/^adult woman and adult man, mature adults, both 25 years old or older, adult body proportions, a man and a woman kissing/);
+    expect(r.none[0]).toMatch(/^adult, mature adult, 25 years old, adult body proportions, sunset beach/);
+    for (const k of ["girl", "both", "none"]) {
+      const neg = r[k][1] as string;
+      expect(neg.startsWith("child, loli, shota, toddler, infant, baby, underage, kindergarten, children, kid, teen, teenager, adolescent, minor")).toBe(true);
+      for (const w of ["schoolgirl", "school uniform", "young-looking", "baby face", "petite", "flat chest", "aged down"]) expect(neg).toContain(w);
+      expect(neg).not.toContain("nsfw");
+    }
+    expect(r.all[0]).toBe("a woman in a park, RAW photo, photorealistic, natural lighting, sharp focus, high detail, film grain");
+    expect(r.all[1]).toMatch(/^nsfw, nude, naked, explicit, sexual, cleavage, underwear, lingerie, child, loli/);
+  });
+  it("safety: photo r18 refuses youth/school/age and real people, allows adults; all-ages refuses sexual words", () => {
+    const r = py(`import safety as s
+cases = ["a woman, 25 years old, nude", "1girl, nude", "女子高生", "制服の女性", "若く見える女性", "a woman, 17 years old", "a teen", "schoolgirl", "a celebrity nude", "女優そっくり"]
+out = {t: s.check_photo_prompt_safety(t, "r18")[0] for t in cases}
+out["all:nude"] = s.check_photo_prompt_safety("a woman, nude", "all_ages")[0]
+out["all:celebrity"] = s.check_photo_prompt_safety("a celebrity", "all_ages")[0]
+out["all:park"] = s.check_photo_prompt_safety("a woman in a park")[0]
+out["loli"] = s.check_prompt_safety("adult woman, loli")[0]
+print(json.dumps(out))`);
+    expect(r).toEqual({
+      "a woman, 25 years old, nude": true, "1girl, nude": true, "女子高生": false, "制服の女性": false, "若く見える女性": false,
+      "a woman, 17 years old": false, "a teen": false, "schoolgirl": false, "a celebrity nude": false, "女優そっくり": false,
+      "all:nude": false, "all:celebrity": false, "all:park": true, loli: false,
+    });
+  });
+  it("Python and TypeScript youth lists are the same", async () => {
+    const { PHOTO_R18_YOUTH_TERMS } = await import("../../worker/modules/images/logic");
+    expect(py("import safety as s\nprint(json.dumps(s.PHOTO_R18_YOUTH_TERMS))")).toEqual(PHOTO_R18_YOUTH_TERMS);
   });
 });

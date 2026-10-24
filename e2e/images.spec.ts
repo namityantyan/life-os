@@ -90,7 +90,7 @@ test("images: a job in progress survives a reload", async ({ authed: page }) => 
   await expect(page.getByTestId("images-pending")).toHaveCount(1);
 });
 
-test("images: model selector — 実写 disabled until the Mac has it, all-ages only, remembered", async ({ authed: page }) => {
+test("images: model selector — 実写 disabled until the Mac has it, R18 only when picked, remembered", async ({ authed: page }) => {
   await mockOnline(page, { models: { anime: true, photo: false } });
   await page.goto("/images");
   const photoTab = page.getByTestId("images-model").getByRole("tab", { name: "実写" });
@@ -100,15 +100,28 @@ test("images: model selector — 実写 disabled until the Mac has it, all-ages 
   await page.unrouteAll({ behavior: "ignoreErrors" });
   await mockOnline(page, { models: { anime: true, photo: true }, generate: { status: 201, body: { item: gen({ model: "photo", tags: "a woman in a flower field" }) } } });
   await page.reload();
-  await page.getByTestId("images-rating").getByRole("tab", { name: "R18" }).click();
+  const r18 = page.getByTestId("images-rating").getByRole("tab", { name: "R18" });
+  const allAges = page.getByTestId("images-rating").getByRole("tab", { name: "全年齢" });
+  await r18.click();
   await page.getByTestId("images-model").getByRole("tab", { name: "実写" }).click();
-  await expect(page.getByTestId("images-rating").getByRole("tab", { name: "R18" })).toBeDisabled();
-  await expect(page.getByTestId("images-rating").getByRole("tab", { name: "全年齢" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("images-model-hint")).toContainText("全年齢のみ");
+  // switching model never carries R18 over: back to 全年齢, R18 has to be picked again
+  await expect(r18).toBeEnabled();
+  await expect(allAges).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("images-model-hint")).toContainText("「R18」を選びます");
   await page.getByTestId("images-prompt").fill("花畑の女性");
-  const req = page.waitForRequest((r) => r.url().endsWith("/api/images/generate") && r.method() === "POST");
+  let req = page.waitForRequest((r) => r.url().endsWith("/api/images/generate") && r.method() === "POST");
   await page.getByTestId("images-generate").click();
   expect((await req).postDataJSON()).toMatchObject({ text: "花畑の女性", model: "photo", rating: "all_ages" });
+
+  await r18.click();
+  await expect(r18).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("images-model-hint")).toContainText("実写のR18は大人（成人）だけ");
+  await page.getByTestId("images-prompt").fill("ベッドの上の大人の女性");
+  req = page.waitForRequest((r) => r.url().endsWith("/api/images/generate") && r.method() === "POST");
+  await page.getByTestId("images-generate").click();
+  expect((await req).postDataJSON()).toMatchObject({ text: "ベッドの上の大人の女性", model: "photo", rating: "r18" });
+
   await page.reload();
   await expect(page.getByTestId("images-model").getByRole("tab", { name: "実写" })).toHaveAttribute("aria-selected", "true");
+  await expect(allAges).toHaveAttribute("aria-selected", "true"); // R18 is never remembered
 });

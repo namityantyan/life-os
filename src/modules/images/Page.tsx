@@ -12,6 +12,8 @@ const isPending = (g: ImageGeneration) => g.status === "queued" || g.status === 
 const fileUrl = (f: ImageFile) => `/api/images/files/${f.id}`;
 const MODEL_KEY = "lifeos.images.model";
 const loadModel = (): ImageModel => { try { return asImageModel(localStorage.getItem(MODEL_KEY)); } catch { return "anime"; } };
+const PHOTO_ALL_AGES_HINT = "実写の全年齢では性的な表現は使えません（成人向けは区分で「R18」を選びます）。実在の人物・実在の人物に似せた画像は作れません。";
+const PHOTO_R18_HINT = "実写のR18は大人（成人）だけです。人物は25歳以上の大人として生成します。年齢・学生・制服・幼さを示す言葉と、実在の人物・実在の人物に似せた画像は使えません。";
 const PHOTO_MISSING_HINT = "実写モデルは自宅Macにまだ入っていません。自宅Macで「LifeOS-画像生成-セットアップ.command」をもう一度実行すると追加されます。";
 
 export default function Page() {
@@ -39,7 +41,8 @@ export default function Page() {
   const photoReady = svc?.models?.photo === true;
   const photoBlocked = model === "photo" && online && !photoReady;
   useEffect(() => { try { localStorage.setItem(MODEL_KEY, model); } catch { /* private mode */ } }, [model]);
-  useEffect(() => { if (model === "photo") setRating("all_ages"); }, [model]);
+  // R18 is never carried over to another model: switching model always goes back to 全年齢 (R18 must be picked again).
+  const switchModel = (m: ImageModel) => { if (m !== model) setRating("all_ages"); setModel(m); };
 
   // Poll in-progress jobs (they live in the DB, so a reload picks them up again).
   const pendingIds = items.filter(isPending).map((g) => g.id).join(",");
@@ -64,7 +67,7 @@ export default function Page() {
     const t = text.trim(); if (!t || busy || !online || photoBlocked) return;
     setBusy(true); setRefusal(null);
     try {
-      const body: Record<string, unknown> = { text: t, count: Number(count), rating: model === "photo" ? "all_ages" : rating, model };
+      const body: Record<string, unknown> = { text: t, count: Number(count), rating, model };
       let useSeed = seed.trim();
       if (!useSeed && seedLock) { useSeed = String(Math.floor(Math.random() * 4294967295)); setSeed(useSeed); }
       if (useSeed) body.seed = Number(useSeed);
@@ -130,8 +133,8 @@ export default function Page() {
           </AnimatePresence>
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">枚数</div><Segmented value={count} onChange={setCount} testId="images-count" options={Array.from({ length: IMAGE_COUNT_MAX }, (_, i) => ({ value: String(i + 1), label: `${i + 1}枚` }))} /></div>
-            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">モデル</div><Segmented value={model} onChange={setModel} testId="images-model" options={(["anime", "photo"] as const).map((m) => ({ value: m, label: IMAGE_MODEL_LABELS[m], disabled: m === "photo" && online && !photoReady && model !== "photo", title: m === "photo" && online && !photoReady ? PHOTO_MISSING_HINT : undefined }))} /></div>
-            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">区分</div><Segmented value={model === "photo" ? "all_ages" : rating} onChange={setRating} testId="images-rating" options={(["all_ages", "r18"] as const).map((r) => ({ value: r, label: IMAGE_RATING_LABELS[r], disabled: r === "r18" && model === "photo", title: r === "r18" && model === "photo" ? "実写は全年齢のみです" : undefined }))} /></div>
+            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">モデル</div><Segmented value={model} onChange={switchModel} testId="images-model" options={(["anime", "photo"] as const).map((m) => ({ value: m, label: IMAGE_MODEL_LABELS[m], disabled: m === "photo" && online && !photoReady && model !== "photo", title: m === "photo" && online && !photoReady ? PHOTO_MISSING_HINT : undefined }))} /></div>
+            <div className="space-y-1.5"><div className="text-xs font-medium text-label-2">区分</div><Segmented value={rating} onChange={setRating} testId="images-rating" options={(["all_ages", "r18"] as const).map((r) => ({ value: r, label: IMAGE_RATING_LABELS[r], title: r === "r18" && model === "photo" ? "実写のR18は大人（成人）だけです" : undefined }))} /></div>
             <div className="space-y-1.5"><div className="text-xs font-medium text-label-2 flex items-center justify-between gap-2">シード<label className="flex items-center gap-1.5 cursor-pointer font-normal"><input type="checkbox" className="accent-[var(--accent)] size-4" checked={seedLock} onChange={(e) => setSeedLock(e.target.checked)} data-testid="images-seed-lock" />固定</label></div><Input value={seed} onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder={seedLock ? "固定（最初はランダム）" : "ランダム"} aria-label="シード" data-testid="images-seed" className="h-9 w-44" /></div>
             <div className="flex-1" />
             <div className="flex flex-col items-end gap-1">
@@ -139,7 +142,7 @@ export default function Page() {
               <span className="text-[0.6875rem] text-label-3 hidden sm:block">Enterで改行・{isMac ? "⌘" : "Ctrl"}＋Enterで生成</span>
             </div>
           </div>
-          {model === "photo" && <p className="text-xs text-label-2" data-testid="images-model-hint">{photoBlocked ? PHOTO_MISSING_HINT : "実写は全年齢のみです。実在の人物・実在の人物に似せた画像は作れません。"}</p>}
+          {model === "photo" && <p className="text-xs text-label-2" data-testid="images-model-hint">{photoBlocked ? PHOTO_MISSING_HINT : rating === "r18" ? PHOTO_R18_HINT : PHOTO_ALL_AGES_HINT}</p>}
           {model === "anime" && online && !photoReady && <p className="text-xs text-label-3" data-testid="images-photo-missing">{PHOTO_MISSING_HINT}</p>}
         </form>
       </Card>
@@ -186,8 +189,8 @@ export default function Page() {
 
       <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile}
         onUseSeed={(v) => { setSeed(String(v)); setSeedLock(true); setSelected(null); toast(`シード ${v} を固定しました`); }}
-        onUseTags={(g) => { setText(g.tags); setModel(asImageModel(g.model)); setRefusal(null); setSelected(null); taRef.current?.focus(); }}
-        onReuse={(g) => { setText(g.prompt_text); setModel(asImageModel(g.model)); setRating(asImageModel(g.model) === "photo" ? "all_ages" : g.rating); setSelected(null); taRef.current?.focus(); }} />
+        onUseTags={(g) => { setText(g.tags); switchModel(asImageModel(g.model)); setRefusal(null); setSelected(null); taRef.current?.focus(); }}
+        onReuse={(g) => { setText(g.prompt_text); setModel(asImageModel(g.model)); setRating(g.rating); setSelected(null); taRef.current?.focus(); }} />
     </div>
   );
 }

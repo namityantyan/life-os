@@ -34,7 +34,10 @@ Life OS 自宅Mac版（life-os/imggen-home/app/）: ai-image-business/scripts/ge
 変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）、ComfyUI のログ出力先、記号の表記と、
 --model（anime=Animagine XL 4.0 既定 / photo=RealVisXL V5.0）の追加。
 anime のプロンプト組み立て・未成年回避ネガティブ・meta.json 証跡は元のまま。
-photo は全年齢のみ（r18 は拒否）で、NSFW 回避と未成年回避のネガティブを常に付ける。
+photo の全年齢は NSFW 回避と未成年回避のネガティブを常に付ける。photo の R18 は大人だけ:
+年齢・学生・幼さを示す語は拒否（safety.check_photo_prompt_safety）、girl/boy は woman/man に書き換え、
+大人の年齢のポジティブ（adult woman / adult man, 25 years old など）を先頭に、強めの未成年回避ネガティブを常に付ける。
+実在の人物はどの区分でも拒否。
 """
 from __future__ import annotations
 
@@ -70,7 +73,7 @@ MODELS = {
         "license": "openrail++ (CreativeML Open RAIL++-M)",
         "commercial_ok": True,
     },
-    # 実写。SG161222/RealVisXL_V5.0（Hugging Face, license: openrail++）。全年齢のみで使う。
+    # 実写。SG161222/RealVisXL_V5.0（Hugging Face, license: openrail++）。R18 は大人だけ（下の PHOTO_R18_*）。
     "photo": {
         "name": "RealVisXL V5.0",
         "ckpt_file": "RealVisXL_V5.0_fp16.safetensors",
@@ -113,8 +116,45 @@ PHOTO_NEGATIVE = (
     "extra fingers, missing fingers, extra limbs, lowres, blurry, worst quality, low quality, jpeg artifacts, "
     "cartoon, anime, illustration, painting, drawing, cgi, 3d render, text, watermark, signature, logo, username"
 )
-# 実写は全年齢のみ。NSFW 回避と未成年回避を常に付ける（補助。最終判断は人間）。
+# 実写の全年齢。NSFW 回避と未成年回避を常に付ける（補助。最終判断は人間）。
 PHOTO_SAFETY_NEGATIVE = f"nsfw, nude, naked, explicit, sexual, cleavage, underwear, lingerie, {MINOR_AVOID_NEGATIVE}"
+# 実写の R18。NSFW 回避は外し、未成年回避を強める（若さ・学生・幼い体型の目印もネガティブに）。補助。最終判断は人間。
+PHOTO_R18_MINOR_NEGATIVE = (
+    f"{MINOR_AVOID_NEGATIVE}, children, kid, teen, teenager, adolescent, minor, young girl, young boy, "
+    "schoolgirl, schoolboy, student, school uniform, sailor uniform, serafuku, gym uniform, school swimsuit, randoseru, "
+    "young-looking, youthful face, baby face, childlike face, childlike body, petite, flat chest, small body, "
+    "short stature, aged down"
+)
+# 実写の R18 で常に先頭に付ける大人の年齢のポジティブ。性別は依頼のまま（どちらも無ければ性別の語を足さない）。
+PHOTO_R18_ADULT_POSITIVE = {
+    "woman": "adult woman, mature adult, 25 years old, adult body proportions",
+    "man": "adult man, mature adult, 25 years old, adult body proportions",
+    "both": "adult woman and adult man, mature adults, both 25 years old or older, adult body proportions",
+    "none": "adult, mature adult, 25 years old, adult body proportions",
+}
+_WOMAN_RE = re.compile(r"\b(woman|women|female|females|lady|ladies|wife|girlfriend|mother|mom)\b", re.I)
+_MAN_RE = re.compile(r"\b(man|men|male|males|gentleman|gentlemen|husband|boyfriend|father|dad)\b", re.I)
+
+
+def photo_adult_rewrite(prompt: str) -> str:
+    """実写 R18: girl/boy/1girl などを woman/man に書き換え、"young" を外す（Life OS の photoAdultTags と同じ）。"""
+    p = re.sub(r"\b1girl\b", "a woman", prompt, flags=re.I)
+    p = re.sub(r"\b1boy\b", "a man", p, flags=re.I)
+    p = re.sub(r"\b(\d+|multiple) ?girls\b", r"\1 women", p, flags=re.I)
+    p = re.sub(r"\b(\d+|multiple) ?boys\b", r"\1 men", p, flags=re.I)
+    p = re.sub(r"\bgirls\b", "women", p, flags=re.I)
+    p = re.sub(r"\bgirl\b", "woman", p, flags=re.I)
+    p = re.sub(r"\bboys\b", "men", p, flags=re.I)
+    p = re.sub(r"\bboy\b", "man", p, flags=re.I)
+    p = re.sub(r"\byoung (woman|women|man|men|adult|adults)\b", r"\1", p, flags=re.I)
+    p = re.sub(r"\byoung\b ?", "", p, flags=re.I)
+    return p
+
+
+def photo_adult_positive(prompt: str) -> str:
+    """書き換え後のプロンプトの性別から、先頭に付ける大人の年齢のポジティブを選ぶ。"""
+    w, m = bool(_WOMAN_RE.search(prompt)), bool(_MAN_RE.search(prompt))
+    return PHOTO_R18_ADULT_POSITIVE["both" if w and m else "woman" if w else "man" if m else "none"]
 PHOTO_PRESETS = {
     "photo": {
         "desc": "実写（RealVisXL V5.0）",
@@ -132,7 +172,6 @@ RES_PRESETS = {"portrait": "896x1152", "square": "1024x1024", "landscape": "1152
                "tall": "832x1216", "wide": "1216x832"}
 DEFAULT_PRESET = {"anime": "pinup", "photo": "photo"}
 PRESETS_BY_MODEL = {"anime": PRESETS, "photo": PHOTO_PRESETS}
-PHOTO_R18_MESSAGE = "実写モデルは全年齢のみです。R18 の実写は生成できません。"
 
 
 def build_prompts(model: str, rating: str, prompt: str, preset: dict,
@@ -140,10 +179,14 @@ def build_prompts(model: str, rating: str, prompt: str, preset: dict,
     """(positive, negative) を組み立てる。anime は元の組み立てのまま。"""
     user_prompt = prompt.strip().rstrip(",")
     if model == "photo":
-        if rating != "all_ages":
-            raise ValueError(PHOTO_R18_MESSAGE)
-        full_prompt = f"{user_prompt}, {preset['quality']}"
-        negative = f"{PHOTO_SAFETY_NEGATIVE}, {preset['negative']}"
+        if rating == "r18":
+            # 大人だけ: girl/boy を書き換え、大人の年齢を先頭に、強めの未成年回避を常に付ける（NSFW 回避は外す）。
+            user_prompt = photo_adult_rewrite(user_prompt).strip().strip(",").strip()
+            full_prompt = f"{photo_adult_positive(user_prompt)}, {user_prompt}, {preset['quality']}"
+            negative = f"{PHOTO_R18_MINOR_NEGATIVE}, {preset['negative']}"
+        else:
+            full_prompt = f"{user_prompt}, {preset['quality']}"
+            negative = f"{PHOTO_SAFETY_NEGATIVE}, {preset['negative']}"
     else:
         # Animagine XL 4.0 の rating tag を Positive 側にも明示する（all_ages -> safe / r18 -> explicit）。
         # 品質タグはスクリプト側で自動付与するため、ユーザー側で毎回書く必要はない。
@@ -353,7 +396,7 @@ def main() -> None:
     ap.add_argument("--prompt", required=True, help="ポジティブプロンプト（英語タグ）")
     ap.add_argument("--negative", default=None, help="追加ネガティブ（プリセットに追記）")
     ap.add_argument("--model", default="anime", choices=list(MODELS),
-                    help="anime=Animagine XL 4.0（既定） / photo=RealVisXL V5.0（実写・全年齢のみ）")
+                    help="anime=Animagine XL 4.0（既定） / photo=RealVisXL V5.0（実写。R18 は大人だけ）")
     ap.add_argument("--preset", default=None, choices=list(PRESETS) + list(PHOTO_PRESETS),
                     help="省略でモデルの既定プリセット")
     ap.add_argument("--rating", default="all_ages", choices=["all_ages", "r18"])
@@ -377,12 +420,10 @@ def main() -> None:
         sys.exit(f"プリセット {preset_name} は {args.model} モデルでは使えません。")
     preset = PRESETS_BY_MODEL[args.model][preset_name]
     if args.model == "photo":
-        if args.rating != "all_ages":
-            sys.exit(PHOTO_R18_MESSAGE)
+        # 実在人物はどの区分でも、全年齢は性的な語、R18 は年齢・学生・幼さを示す語を拒否（サービスと同じ）。
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from safety import check_prompt_safety, check_photo_prompt_safety
-        for check in (check_prompt_safety, check_photo_prompt_safety):
-            ok, msg = check(args.prompt)
+        for ok, msg in (check_prompt_safety(args.prompt), check_photo_prompt_safety(args.prompt, args.rating)):
             if not ok:
                 sys.exit(msg)
     res = RES_PRESETS.get(args.res, args.res) if args.res else preset["res"]

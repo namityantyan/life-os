@@ -4,8 +4,8 @@ import type { AppEnv, Env } from "../../env";
 import { all, one, run, newId } from "../../core/db";
 import { chatJson } from "../../core/ai";
 import { notify } from "../../core/notify";
-import { IMAGE_COUNT_MAX, IMAGE_MODELS, IMAGE_RATINGS, PHOTO_R18_MESSAGE, asImageModel, type ImageFile, type ImageGeneration, type ImageModel, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
-import { SAFE_NAME, clampCount, decideRating, explicitlyAdult, guardText, aiRefusal, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError, systemPromptFor } from "./logic";
+import { IMAGE_COUNT_MAX, IMAGE_MODELS, IMAGE_RATINGS, asImageModel, type ImageFile, type ImageGeneration, type ImageModel, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
+import { SAFE_NAME, clampCount, decideRating, guardText, aiRefusal, looksLikeTags, normalizeTags, parseConversion, photoAdultTags, refuseMessage, serviceError, systemPromptFor } from "./logic";
 import { buildHomeInstaller } from "./installer";
 
 /**
@@ -189,14 +189,16 @@ const genSchema = z.object({
 });
 
 /** Converts the user's words to tags (AI) and applies the §0 guard on both sides of the conversion.
- *  The photo model is all-ages only (r18 refused up front) and uses its own conversion prompt (descriptive phrases, not danbooru tags). */
+ *  The photo model uses its own conversion prompts (descriptive phrases, not danbooru tags). Its rating is exactly the one
+ *  the user picked (never inferred): r18 only with rating "r18", then the user's words and the converted tags must pass the
+ *  adult-only guard, "girl"/"boy" are rewritten to "woman"/"man", and the Mac adds adult positives + minor negatives. */
 export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>): Promise<{ ok: true; tags: string; model: ImageModel; rating: ImageRating; count: number } | { ok: false; status: 422 | 503; code: string; message: string }> {
   const model = body.model ?? "anime";
-  if (model === "photo" && (body.rating === "r18" || explicitlyAdult(body.text))) return { ok: false, status: 422, code: "refused", message: PHOTO_R18_MESSAGE };
-  const pre = guardText(body.text, body.rating === "r18" ? "r18" : "all_ages", model);
+  const requested: ImageRating = body.rating === "r18" ? "r18" : "all_ages";
+  const pre = guardText(body.text, requested, model);
   if (!pre.ok) return { ok: false, status: 422, code: "refused", message: pre.message };
   const fallback = { refuse: "__fallback", reason: "", tags: "", rating: "all_ages", count: null };
-  const ai = await chatJson<unknown>(env, [{ role: "system", content: systemPromptFor(model) }, { role: "user", content: body.text }], fallback);
+  const ai = await chatJson<unknown>(env, [{ role: "system", content: systemPromptFor(model, requested) }, { role: "user", content: body.text }], fallback);
   let conv = ai.parsed ? parseConversion(ai.data, model) : null;
   if (!conv) {
     // AI down or unparseable: only English tags typed by the user can go through (keyword guard + service guard).
@@ -207,7 +209,9 @@ export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>):
   if (conv.refuse) return { ok: false, status: 422, code: "refused", message: refuseMessage(conv.refuse, conv.reason) };
   if (looksLikeTags(body.text)) conv.tags = normalizeTags(body.text); // tags typed or reused from a past image are used as-is (the AI still ran the refuse check)
   if (!conv.tags) return { ok: false, status: 422, code: "empty", message: "画像の内容を読み取れませんでした。もう少し具体的に書いてください。" };
-  const rating = model === "photo" ? "all_ages" : decideRating(body.rating, conv.rating, body.text);
+  const rating = model === "photo" ? requested : decideRating(body.rating, conv.rating, body.text);
+  if (model === "photo" && rating === "r18") conv.tags = photoAdultTags(conv.tags);
+  if (!conv.tags) return { ok: false, status: 422, code: "empty", message: "画像の内容を読み取れませんでした。もう少し具体的に書いてください。" };
   const post = guardText(conv.tags, rating, model);
   if (!post.ok) return { ok: false, status: 422, code: "refused", message: post.message };
   return { ok: true, tags: conv.tags, model, rating, count: body.count ?? conv.count ?? 1 };

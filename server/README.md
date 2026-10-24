@@ -68,9 +68,12 @@ Google ログイン ─▶ workers.dev の callback（Google に登録済み）�
 | ライセンス | openrail++（商用可） | openrail++（商用可・利用制限条項あり） |
 | AI 変換 | 英語 danbooru タグ | 英語の描写フレーズ（タグ・品質語なし） |
 | 設定 | euler_ancestral / normal, 28 steps, CFG 5 | dpmpp_sde / karras, 30 steps, CFG 5 |
-| 区分 | 全年齢・R18 | **全年齢のみ**（R18 は Life OS とサービスの両方で 422） |
+| 区分 | 全年齢・R18 | 全年齢・R18（R18 は区分で明示的に選んだときだけ・**大人だけ**） |
 
-- 実写はディープフェイクの危険が大きいので、実在の人物（芸能人・政治家・知人・「〜に似た」など）の指定はキーワードでも弾き、NSFW 回避と未成年回避のネガティブを常に付けます。
+- 実写はディープフェイクの危険が大きいので、実在の人物（芸能人・政治家・知人・「〜に似た」「そっくり」「looks like」「deepfake」など）の指定はどの区分でもキーワードと AI 判定の両方で弾きます（Life OS とサービスの両方で 422）。
+- 実写の全年齢: 性的・成人向けの語は弾き（R18 を選ぶよう案内）、NSFW 回避と未成年回避のネガティブを常に付けます。
+- 実写の R18: 区分で「R18」を選んだときだけ（AI や文章からは推定しない。モデルを切り替えると全年齢に戻る）。年齢・学生・学校・制服・幼さを示す語（少女・女子高生・JK・学生・制服・ロリ・幼い・若く見える・小柄・teen・schoolgirl・petite など）と 20 歳未満の年齢（「17歳」「16 years old」）は 422。`girl`/`boy`/`1girl` は弾かずに `woman`/`man` に書き換え、AI 変換も woman/man で書きます。Mac 側（generate.py）は大人の年齢のポジティブ（`adult woman, mature adult, 25 years old, adult body proportions` など。性別は依頼のまま）を先頭に、強めの未成年回避ネガティブを常に付けます（NSFW 回避は外す）。語の一覧は `worker/modules/images/logic.ts` の `PHOTO_R18_YOUTH_TERMS` と `imggen-home/app/safety.py` の同名リスト（同じ内容）。
+- 古いサービス（この方針より前のセットアップ）は実写 R18 を 422 で断るので、自宅Macでセットアップをもう一度実行して更新します。
 - サービス API: `POST /v1/generate` の `"model": "anime" | "photo"`（省略時は anime）、`GET /v1/health` の `"models": {"anime": bool, "photo": bool}`。`models` の無い古いサービスは実写を使えない扱い（`model` を無視してアニメで描いてしまうため、Life OS が送る前に確認します）。
 - 実写モデルは任意です。自宅Macの空きが足りないとセットアップは実写を省略し（アニメだけで動く）、空きを作って再実行すると追加します。
 
