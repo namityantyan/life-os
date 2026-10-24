@@ -1,7 +1,8 @@
 import type { Env } from "../env";
 import type { LifeContext, WeatherLocation } from "../../shared/types";
 import { all, one, getSetting, jstDate, jstNow, kvPutSafe } from "./db";
-import { fetchWeather } from "./weather";
+import { weatherFor } from "./weather";
+import type { Background } from "./background";
 import { fxSummary } from "../modules/fx/hub";
 import { chat } from "./ai";
 import { buildActivityPlan, weekStart, ACTIVITY_STANDARDS_PROMPT, type ActivityDayInput } from "../modules/health/activity";
@@ -58,7 +59,7 @@ export async function buildLifeContext(env: Env, userId: string, opts: { weather
   let pressure: LifeContext["health"]["pressure"] = null;
   if (opts.weather) {
     const loc = await getSetting<WeatherLocation | null>(env, userId, "weather_location", null);
-    if (loc) { try { pressure = (await fetchWeather(loc)).pressure; } catch { pressure = null; } }
+    if (loc) { try { pressure = (await weatherFor(env, loc)).pressure; } catch { pressure = null; } }
   }
   const trainedToday = Boolean(lastSession && jstDay(lastSession.started_at) === today);
   // The latest row may be older than this week; it still tells the plan that Oura is connected.
@@ -136,20 +137,34 @@ export async function adviseWithContext(env: Env, userId: string, role: string, 
 /**
  * One-line daily hint. Rule-based `suggestAction` is always computed; when Workers AI is
  * available the hint is refined with the full Life Context (cached per user per hour in KV).
+ * With `background` (dashboard) a missing AI hint never blocks: the rule-based text is returned at once and
+ * the AI hint is generated after the response for the next open. Without it (cron) the call is awaited.
+ * A failed/empty AI answer is cached as a marker for 10 min so a broken relay isn't retried on every request.
  */
-export async function dailyHint(env: Env, userId: string, ctx: LifeContext): Promise<{ text: string; source: "ai" | "rules" }> {
+export const HINT_FAILED = "\u0000ai-failed";
+/** Hint calls are optional, so no retry and a bound well under the relay default (110 s × 2). */
+export const HINT_TIMEOUT_MS = 20_000;
+const hintInflight = new Set<string>();
+export async function dailyHint(env: Env, userId: string, ctx: LifeContext, opts: { background?: Background } = {}): Promise<{ text: string; source: "ai" | "rules" }> {
   const base = suggestAction(ctx);
-  if (!env.AI) return { text: base, source: "rules" };
+  const rules = { text: base, source: "rules" as const };
+  if (!env.AI) return rules;
   const key = `hint:${userId}:${ctx.now.slice(0, 13)}`;
-  const cached = await env.KV.get(key);
-  if (cached) return { text: cached, source: "ai" };
+  const cached = await env.KV.get(key).catch(() => null);
+  if (cached) return cached === HINT_FAILED ? rules : { text: cached, source: "ai" };
+  if (opts.background) {
+    if (!hintInflight.has(key)) { hintInflight.add(key); opts.background(generateHint(env, key, ctx, base).finally(() => hintInflight.delete(key))); }
+    return rules;
+  }
+  const text = await generateHint(env, key, ctx, base);
+  return text ? { text, source: "ai" } : rules;
+}
+async function generateHint(env: Env, key: string, ctx: LifeContext, base: string): Promise<string | null> {
   const r = await chat(env, [
     { role: "system", content: contextSystemPrompt(ctx, "ダッシュボードの一言アドバイス。70文字以内の日本語1文。見出し・絵文字・前置きなし。欠測は推測しない。") },
     { role: "user", content: `ルールベースの案: 「${base}」。必要なら生活データ全体を踏まえて言い換え、そのまま1文だけ返してください。歩数・分などの具体的な数値は残し、運動量を控えめな表現に弱めないでください。` },
-  ], { maxTokens: 120 });
-  if (r.provider !== "workers-ai") return { text: base, source: "rules" };
-  const text = r.text.replace(/^["「]|["」]$/g, "").split("\n")[0].trim().slice(0, 90);
-  if (!text) return { text: base, source: "rules" };
-  await kvPutSafe(env, key, text, { expirationTtl: 3600 });
-  return { text, source: "ai" };
+  ], { maxTokens: 120, timeoutMs: HINT_TIMEOUT_MS });
+  const text = r.provider === "workers-ai" ? r.text.replace(/^["「]|["」]$/g, "").split("\n")[0].trim().slice(0, 90) : "";
+  await kvPutSafe(env, key, text || HINT_FAILED, { expirationTtl: text ? 3600 : 600 });
+  return text || null;
 }

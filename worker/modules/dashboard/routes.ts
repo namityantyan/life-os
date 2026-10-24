@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../../env";
 import type { WeatherLocation } from "../../../shared/types";
-import { all, getSetting, kvPutSafe } from "../../core/db";
+import { all, getSetting } from "../../core/db";
+import { backgroundOf } from "../../core/background";
 import { buildLifeContext, dailyHint } from "../../core/context";
 import { fxQuotes } from "../fx/hub";
-import { fetchWeather, WEATHER_CODE_LABEL, type WeatherSnapshot } from "../../core/weather";
+import { weatherFor, WEATHER_CODE_LABEL, type WeatherSnapshot } from "../../core/weather";
 
 export const routes = new Hono<AppEnv>();
 
-/** One call that feeds every dashboard card. Weather is cached 10 min in KV. */
+/** One call that feeds every dashboard card. Weather is stale-while-revalidate (core/weather); the AI hint never blocks. */
 routes.get("/", async (c) => {
   const user = c.get("user");
   const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -16,14 +17,10 @@ routes.get("/", async (c) => {
   const loc = await getSetting<WeatherLocation | null>(c.env, user.id, "weather_location", null);
   let weather: (WeatherSnapshot & { weather_label: string | null }) | null = null;
   let weatherError: string | null = null;
+  const bg = backgroundOf(c);
   if (loc) {
-    const key = `weather:${loc.lat.toFixed(2)},${loc.lon.toFixed(2)}`;
-    const cached = await c.env.KV.get(key, "json");
-    if (cached) weather = cached as any;
-    else {
-      try { const w = await fetchWeather(loc); weather = { ...w, weather_label: w.weather_code != null ? (WEATHER_CODE_LABEL[w.weather_code] ?? "—") : null }; await kvPutSafe(c.env, key, JSON.stringify(weather), { expirationTtl: 600 }); }
-      catch (e) { weatherError = String(e); }
-    }
+    try { const w = await weatherFor(c.env, loc, bg); weather = { ...w, weather_label: w.weather_code != null ? (WEATHER_CODE_LABEL[w.weather_code] ?? "—") : null }; }
+    catch (e) { weatherError = String(e); }
   }
   const ctx = await buildLifeContext(c.env, user.id);
   if (weather) ctx.health.pressure = weather.pressure;
@@ -32,6 +29,6 @@ routes.get("/", async (c) => {
     all(c.env.DB, "SELECT id,title,start_at,end_at,type FROM planner_items WHERE user_id=? AND type='event' AND archived_at IS NULL AND substr(start_at,1,10)>=? AND substr(start_at,1,10)<=? ORDER BY start_at LIMIT 30", user.id, today, weekEnd),
     fxQuotes(c.env, user.id),
   ]);
-  const [hint, layout] = await Promise.all([dailyHint(c.env, user.id, ctx), getSetting<unknown>(c.env, user.id, "dashboard_layout", null)]);
+  const [hint, layout] = await Promise.all([dailyHint(c.env, user.id, ctx, { background: bg }), getSetting<unknown>(c.env, user.id, "dashboard_layout", null)]);
   return c.json({ context: ctx, suggestion: hint.text, suggestionSource: hint.source, weather, weatherError, weatherConfigured: Boolean(loc), tasks, events, fxPairs: pairs, today, layout });
 });

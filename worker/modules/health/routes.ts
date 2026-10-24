@@ -5,7 +5,8 @@ import type { WeatherLocation } from "../../../shared/types";
 import { all, one, run, newId, getSetting, setSetting, jstDate, kvPutSafe } from "../../core/db";
 import { chatJson } from "../../core/ai";
 import { adviseWithContext, buildLifeContext, suggestAction } from "../../core/context";
-import { fetchWeather, type WeatherSnapshot } from "../../core/weather";
+import { weatherCached } from "../../core/weather";
+import { backgroundOf } from "../../core/background";
 import { syncOura } from "./oura";
 import { mealRoutes, dayLog } from "./meals";
 import { lookupFood } from "./food-table";
@@ -14,18 +15,6 @@ import { NUTRIENT_KEYS, summarizeNutrition, estimateCost, computePersonalThresho
 export const routes = new Hono<AppEnv>();
 
 /* ---------- helpers ---------- */
-async function weatherCached(env: Env, userId: string): Promise<WeatherSnapshot | null> {
-  const loc = await getSetting<WeatherLocation | null>(env, userId, "weather_location", null);
-  if (!loc) return null;
-  const key = `weather:${loc.lat.toFixed(2)},${loc.lon.toFixed(2)}`;
-  try {
-    const cached = (await env.KV.get(key, "json")) as WeatherSnapshot | null;
-    if (cached?.pressure_series) return cached;
-    const w = await fetchWeather(loc);
-    await kvPutSafe(env, key, JSON.stringify(w), { expirationTtl: 600 });
-    return w;
-  } catch { return null; }
-}
 /** |delta3h| for every hour in the series that has 3 preceding readings → baseline distribution. */
 function baselineAbsDeltas(series: { hpa: number | null }[]): number[] {
   const out: number[] = [];
@@ -46,7 +35,7 @@ routes.get("/overview", async (c) => {
   const [latest, series, weather, ctx, logs] = await Promise.all([
     one(c.env.DB, "SELECT day,sleep_duration_sec,sleep_score,readiness_score,steps,hrv,resting_hr,sleep_balance,synced_at FROM oura_daily WHERE user_id=? ORDER BY day DESC LIMIT 1", user.id),
     all(c.env.DB, "SELECT day,sleep_duration_sec,sleep_score,readiness_score,steps,hrv,resting_hr,sleep_balance FROM oura_daily WHERE user_id=? AND day>=? ORDER BY day", user.id, since),
-    weatherCached(c.env, user.id),
+    weatherCached(c.env, user.id, backgroundOf(c)),
     buildLifeContext(c.env, user.id),
     all(c.env.DB, "SELECT id,logged_at,symptom,severity,pressure_hpa,delta3h,delta6h FROM pressure_logs WHERE user_id=? AND deleted_at IS NULL ORDER BY logged_at DESC LIMIT 30", user.id),
   ]);
@@ -269,7 +258,7 @@ routes.get("/pressure/logs", async (c) => c.json({ items: await all(c.env.DB, "S
 routes.post("/pressure/logs", async (c) => {
   const user = c.get("user");
   const b = z.object({ symptom: z.string().max(200).nullable().optional(), severity: z.number().int().min(1).max(5).nullable().optional() }).parse(await c.req.json().catch(() => ({})));
-  const w = await weatherCached(c.env, user.id);
+  const w = await weatherCached(c.env, user.id, backgroundOf(c));
   const id = newId();
   await run(c.env.DB, "INSERT INTO pressure_logs (id,user_id,logged_at,symptom,severity,pressure_hpa,delta3h,delta6h) VALUES (?,?,?,?,?,?,?,?)",
     id, user.id, new Date().toISOString(), b.symptom ?? null, b.severity ?? null, w?.pressure.current ?? null, w?.pressure.delta3h ?? null, w?.pressure.delta6h ?? null);
@@ -290,7 +279,7 @@ routes.delete("/pressure/logs/:id", async (c) => {
 routes.get("/pressure/personal", async (c) => {
   const user = c.get("user");
   const logs = await all<{ delta3h: number | null }>(c.env.DB, "SELECT delta3h FROM pressure_logs WHERE user_id=? AND deleted_at IS NULL", user.id);
-  const w = await weatherCached(c.env, user.id);
+  const w = await weatherCached(c.env, user.id, backgroundOf(c));
   return c.json(computePersonalThreshold(logs, w ? baselineAbsDeltas(w.pressure_series) : []));
 });
 

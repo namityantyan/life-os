@@ -1,13 +1,18 @@
+import { cacheClear, cacheEpoch, cacheGet, cacheHas, cacheSet, cacheSetIfCurrent, invalidateFor } from "./apiCache";
 export class ApiError extends Error { constructor(public status: number, message: string, public detail?: unknown) { super(message); } }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  if (method !== "GET") { try { return await send<T>(method, path, body); } finally { invalidateFor(path); } }
+  return send<T>(method, path, body);
+}
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: "same-origin",
   });
-  if (res.status === 401) { window.dispatchEvent(new CustomEvent("lifeos:unauthorized")); throw new ApiError(401, "unauthorized"); }
+  if (res.status === 401) { cacheClear(); window.dispatchEvent(new CustomEvent("lifeos:unauthorized")); throw new ApiError(401, "unauthorized"); }
   const text = await res.text();
   let data: any = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
@@ -22,21 +27,37 @@ export const api = {
   del: <T>(path: string, body?: unknown) => request<T>("DELETE", path, body),
 };
 
-import { useCallback, useEffect, useRef, useState } from "react";
-/** Small data hook with loading/error/reload and optional polling (ms). */
-export function useApi<T>(path: string | null, opts: { poll?: number; deps?: unknown[] } = {}) {
-  const [data, setData] = useState<T | null>(null);
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+/**
+ * Small data hook with loading/error/reload and optional polling (ms). Responses are kept in a
+ * module-level cache (./apiCache): a revisit renders the cached data immediately (loading=false)
+ * and revalidates silently. `quiet` also keeps path changes silent while earlier data is shown.
+ */
+export function useApi<T>(path: string | null, opts: { poll?: number; deps?: unknown[]; quiet?: boolean } = {}) {
+  const [data, setDataState] = useState<T | null>(() => (path ? cacheGet<T>(path) ?? null : null));
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(Boolean(path));
+  const [loading, setLoading] = useState<boolean>(Boolean(path) && !(path && cacheHas(path)));
   const alive = useRef(true);
+  const shown = useRef(data != null); shown.current = data != null;
   const reload = useCallback(async (silent = false) => {
     if (!path) return;
     if (!silent) setLoading(true);
-    try { const d = await api.get<T>(path); if (alive.current) { setData(d); setError(null); } }
+    const at = cacheEpoch();
+    try { const d = await api.get<T>(path); cacheSetIfCurrent(path, d, at); if (alive.current) { setDataState(d); setError(null); } }
     catch (e: any) { if (alive.current) setError(e?.message ?? String(e)); }
     finally { if (alive.current) setLoading(false); }
   }, [path]);
-  useEffect(() => { alive.current = true; reload(); return () => { alive.current = false; }; // eslint-disable-next-line react-hooks/exhaustive-deps
+  const setData = useCallback((v: SetStateAction<T | null>) => setDataState((prev) => {
+    const next = typeof v === "function" ? (v as (p: T | null) => T | null)(prev) : v;
+    if (path && next != null) cacheSet(path, next);
+    return next;
+  }), [path]);
+  useEffect(() => {
+    alive.current = true;
+    const hit = path ? cacheHas(path) : false;
+    if (hit) { setDataState(cacheGet<T>(path!) ?? null); setLoading(false); }
+    reload(hit || (Boolean(opts.quiet) && shown.current));
+    return () => { alive.current = false; }; // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload, ...(opts.deps ?? [])]);
   useEffect(() => {
     if (!opts.poll || !path) return;

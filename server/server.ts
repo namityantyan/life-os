@@ -1,14 +1,15 @@
 // Life OS self-hosted server: the Cloudflare Worker app (worker/index.ts) on Node + SQLite.
 //   https://dashboard.nami-tool.com → nginx → 127.0.0.1:8791 (this process, PM2 "lifeos")
 // Bindings: DB = SQLite (D1 shim), KV = SQLite table, AI = Workers AI via the relay Worker, ASSETS = dist/client.
-import { readdirSync, readFileSync, existsSync, mkdirSync, statSync, readdirSync as ls, rmSync } from "node:fs";
-import { join, resolve, extname, normalize } from "node:path";
+import { readdirSync, readFileSync, mkdirSync, readdirSync as ls, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import worker from "../worker/index";
 import { runScheduled } from "../worker/cron";
 import type { Env } from "../worker/env";
 import { D1Shim, migrate } from "../hub/d1";
 import { KvShim, aiRelay, cronMatches, dirImageStore } from "./shims";
+import { staticFiles, compressResponse } from "./http";
 
 const ROOT = resolve(process.env.LIFEOS_ROOT ?? ".");
 const DATA = resolve(process.env.LIFEOS_DATA_DIR ?? join(ROOT, "data"));
@@ -22,20 +23,10 @@ migrate(db, readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).map((name)
 const kv = new KvShim(db);
 // Generated images (画像生成) are files under data/images, outside SQLite, so the daily DB backups stay small.
 const imageStore = dirImageStore(resolve(process.env.IMGGEN_STORE_DIR ?? join(DATA, "images")));
+db.optimize();
 
-const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".webmanifest": "application/manifest+json", ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2", ".map": "application/json" };
-/** Static assets with SPA fallback (same as Workers assets "single-page-application"). */
-const assets = {
-  async fetch(req: Request | string) {
-    const url = new URL(typeof req === "string" ? req : req.url);
-    let rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
-    let file = join(CLIENT, rel);
-    if (!file.startsWith(CLIENT) || !existsSync(file) || statSync(file).isDirectory()) file = join(CLIENT, "index.html");
-    const ext = extname(file);
-    const immutable = rel.startsWith("/assets/");
-    return new Response(readFileSync(file), { headers: { "Content-Type": MIME[ext] ?? "application/octet-stream", "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache" } });
-  },
-};
+/** Static assets with SPA fallback, cached in memory with ETag and (pre)compressed — see ./http. */
+const assets = staticFiles(CLIENT);
 
 const env = {
   DB: db, KV: kv, ASSETS: assets, IMAGE_STORE: imageStore, AI: aiRelay(process.env.AI_RELAY_URL, process.env.AI_RELAY_SECRET),
@@ -49,7 +40,7 @@ const ctx = { waitUntil(p: Promise<unknown>) { const q = Promise.resolve(p).catc
 const isApi = (p: string) => p === "/api" || p.startsWith("/api/");
 serve({
   port: Number(process.env.PORT ?? 8791), hostname: process.env.BIND ?? "127.0.0.1",
-  fetch: (req) => { const p = new URL(req.url).pathname; return isApi(p) ? worker.fetch(req, env, ctx) : assets.fetch(req); },
+  fetch: async (req) => { const p = new URL(req.url).pathname; return isApi(p) ? compressResponse(await worker.fetch(req, env, ctx), req.headers.get("Accept-Encoding")) : assets.fetch(req); },
 });
 console.log(`lifeos listening on ${process.env.BIND ?? "127.0.0.1"}:${process.env.PORT ?? 8791}`);
 
@@ -61,7 +52,7 @@ setInterval(() => {
   if (m === lastMinute) return; lastMinute = m;
   for (const cron of CRONS) if (cronMatches(cron, now)) ctx.waitUntil(runScheduled(env, cron));
   if (now.getUTCMinutes() === 0) kv.sweep();
-  if (now.getUTCHours() === 18 && now.getUTCMinutes() === 30) backup(); // 03:30 JST
+  if (now.getUTCHours() === 18 && now.getUTCMinutes() === 30) { backup(); db.optimize(); } // 03:30 JST
 }, 5_000);
 
 function backup() {
