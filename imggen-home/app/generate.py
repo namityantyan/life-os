@@ -31,8 +31,10 @@ ComfyUI(127.0.0.1:8188) を叩いて画像を生成し、
     python scripts/generate.py --prompt "..." --seed 12345
 
 Life OS 自宅Mac版（life-os/imggen-home/app/）: ai-image-business/scripts/generate.py の複製。
-変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）、ComfyUI のログ出力先、
-記号の表記だけ。プロンプト組み立て・未成年回避ネガティブ・meta.json 証跡は元のまま。
+変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）、ComfyUI のログ出力先、記号の表記と、
+--model（anime=Animagine XL 4.0 既定 / photo=RealVisXL V5.0）の追加。
+anime のプロンプト組み立て・未成年回避ネガティブ・meta.json 証跡は元のまま。
+photo は全年齢のみ（r18 は拒否）で、NSFW 回避と未成年回避のネガティブを常に付ける。
 """
 from __future__ import annotations
 
@@ -60,13 +62,24 @@ RUN_SH = COMFY_DIR / "main.py"
 API = "http://127.0.0.1:8188"
 
 # 主力モデル（docs/作風決定.md）。ホワイトリスト・販売可を一次確認済み。
-MODEL = {
-    "name": "Animagine XL 4.0",
-    "ckpt_file": "animagine-xl-4.0.safetensors",
-    "version": "4.0",
-    "license": "openrail++ (CreativeML Open RAIL++-M)",
-    "commercial_ok": True,
+MODELS = {
+    "anime": {
+        "name": "Animagine XL 4.0",
+        "ckpt_file": "animagine-xl-4.0.safetensors",
+        "version": "4.0",
+        "license": "openrail++ (CreativeML Open RAIL++-M)",
+        "commercial_ok": True,
+    },
+    # 実写。SG161222/RealVisXL_V5.0（Hugging Face, license: openrail++）。全年齢のみで使う。
+    "photo": {
+        "name": "RealVisXL V5.0",
+        "ckpt_file": "RealVisXL_V5.0_fp16.safetensors",
+        "version": "5.0 (fp16)",
+        "license": "openrail++ (CreativeML Open RAIL++-M)",
+        "commercial_ok": True,
+    },
 }
+MODEL = MODELS["anime"]  # 互換のため（既定モデル）
 
 # 作風プリセット。品質タグ・ネガティブ・サンプラ設定をまとめる。
 # 「鮮やかセル調ピンナップ」を既定とする（docs/作風決定.md）。
@@ -91,6 +104,62 @@ PRESETS = {
         "negative": BASE_NEGATIVE,
     },
 }
+
+# 実写（RealVisXL V5.0）。モデルカード推奨: DPM++ SDE Karras 30 steps 以上。
+# プロンプトは英語の描写フレーズ（danbooru タグや rating タグは使わない）。品質語は末尾に足す。
+PHOTO_QUALITY = "RAW photo, photorealistic, natural lighting, sharp focus, high detail, film grain"
+PHOTO_NEGATIVE = (
+    "bad hands, bad anatomy, ugly, deformed, face asymmetry, eyes asymmetry, deformed eyes, deformed mouth, "
+    "extra fingers, missing fingers, extra limbs, lowres, blurry, worst quality, low quality, jpeg artifacts, "
+    "cartoon, anime, illustration, painting, drawing, cgi, 3d render, text, watermark, signature, logo, username"
+)
+# 実写は全年齢のみ。NSFW 回避と未成年回避を常に付ける（補助。最終判断は人間）。
+PHOTO_SAFETY_NEGATIVE = f"nsfw, nude, naked, explicit, sexual, cleavage, underwear, lingerie, {MINOR_AVOID_NEGATIVE}"
+PHOTO_PRESETS = {
+    "photo": {
+        "desc": "実写（RealVisXL V5.0）",
+        "steps": 30,
+        "cfg": 5.0,
+        "sampler": "dpmpp_sde",
+        "scheduler": "karras",
+        "res": "896x1152",
+        "quality": PHOTO_QUALITY,
+        "negative": PHOTO_NEGATIVE,
+    },
+}
+# SDXL の学習解像度（どちらのモデルもこの中から選ぶ）。
+RES_PRESETS = {"portrait": "896x1152", "square": "1024x1024", "landscape": "1152x896",
+               "tall": "832x1216", "wide": "1216x832"}
+DEFAULT_PRESET = {"anime": "pinup", "photo": "photo"}
+PRESETS_BY_MODEL = {"anime": PRESETS, "photo": PHOTO_PRESETS}
+PHOTO_R18_MESSAGE = "実写モデルは全年齢のみです。R18 の実写は生成できません。"
+
+
+def build_prompts(model: str, rating: str, prompt: str, preset: dict,
+                  extra_negative: str | None = None) -> tuple[str, str]:
+    """(positive, negative) を組み立てる。anime は元の組み立てのまま。"""
+    user_prompt = prompt.strip().rstrip(",")
+    if model == "photo":
+        if rating != "all_ages":
+            raise ValueError(PHOTO_R18_MESSAGE)
+        full_prompt = f"{user_prompt}, {preset['quality']}"
+        negative = f"{PHOTO_SAFETY_NEGATIVE}, {preset['negative']}"
+    else:
+        # Animagine XL 4.0 の rating tag を Positive 側にも明示する（all_ages -> safe / r18 -> explicit）。
+        # 品質タグはスクリプト側で自動付与するため、ユーザー側で毎回書く必要はない。
+        rating_tag = "explicit" if rating == "r18" else "safe"
+        full_prompt = f"{user_prompt}, {rating_tag}, {preset['quality']}"
+        negative = preset["negative"]
+        if rating == "r18":
+            # R-18 は未成年表現を避ける語を既定で追加。
+            negative = f"{MINOR_AVOID_NEGATIVE}, {negative}"
+        else:
+            # 全年齢では NSFW を明示的に避ける。
+            negative = f"nsfw, explicit, {negative}"
+    # --negative は既定ネガティブを置き換えず、末尾に追記する。
+    if extra_negative:
+        negative = f"{negative}, {extra_negative.strip().rstrip(',')}"
+    return full_prompt, negative
 
 
 JSON_MODE = False
@@ -136,12 +205,12 @@ def ensure_server() -> subprocess.Popen | None:
     sys.exit("ComfyUI が時間内に起動しませんでした。")
 
 
-def check_model_available() -> None:
+def check_model_available(model: dict = MODEL) -> None:
     oi = _get(f"/object_info/CheckpointLoaderSimple")
     ckpts = oi["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
-    if MODEL["ckpt_file"] not in ckpts:
+    if model["ckpt_file"] not in ckpts:
         sys.exit(
-            f"モデル {MODEL['ckpt_file']} が見つかりません。\n"
+            f"モデル {model['ckpt_file']} が見つかりません。\n"
             f"  認識されているモデル: {ckpts}\n"
             f"  ~/LifeOS-imggen/models/checkpoints/ にダウンロードできているか確認してください。"
         )
@@ -180,10 +249,10 @@ def make_workspace(work_id: str) -> Path:
 
 # ---- グラフ構築 ----------------------------------------------------------
 def build_graph(prompt: str, negative: str, seed: int, preset: dict,
-                width: int, height: int) -> dict:
+                width: int, height: int, model: dict = MODEL) -> dict:
     return {
         "4": {"class_type": "CheckpointLoaderSimple",
-              "inputs": {"ckpt_name": MODEL["ckpt_file"]}},
+              "inputs": {"ckpt_name": model["ckpt_file"]}},
         "5": {"class_type": "EmptyLatentImage",
               "inputs": {"width": width, "height": height, "batch_size": 1}},
         "6": {"class_type": "CLIPTextEncode",
@@ -225,16 +294,16 @@ def collect_output(img_meta: dict) -> Path:
 # ---- meta.json / ログ ----------------------------------------------------
 def write_meta(work_dir: Path, work_id: str, title: str, rating: str,
                prompt: str, negative: str, seeds: list[int], preset: dict,
-               width: int, height: int, count: int) -> None:
+               width: int, height: int, count: int, model: dict = MODEL) -> None:
     meta = {
         "work_id": work_id,
         "title": title,
         "rating": rating,
         "model": {
-            "name": MODEL["name"],
-            "version": MODEL["version"],
-            "license": MODEL["license"],
-            "commercial_ok": MODEL["commercial_ok"],
+            "name": model["name"],
+            "version": model["version"],
+            "license": model["license"],
+            "commercial_ok": model["commercial_ok"],
         },
         "loras": [],
         "generation": {
@@ -283,7 +352,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="生成〜証跡記録を一気通貫で行う")
     ap.add_argument("--prompt", required=True, help="ポジティブプロンプト（英語タグ）")
     ap.add_argument("--negative", default=None, help="追加ネガティブ（プリセットに追記）")
-    ap.add_argument("--preset", default="pinup", choices=list(PRESETS))
+    ap.add_argument("--model", default="anime", choices=list(MODELS),
+                    help="anime=Animagine XL 4.0（既定） / photo=RealVisXL V5.0（実写・全年齢のみ）")
+    ap.add_argument("--preset", default=None, choices=list(PRESETS) + list(PHOTO_PRESETS),
+                    help="省略でモデルの既定プリセット")
     ap.add_argument("--rating", default="all_ages", choices=["all_ages", "r18"])
     ap.add_argument("--count", type=int, default=1, help="生成枚数")
     ap.add_argument("--seed", type=int, default=None, help="固定seed（省略でランダム）")
@@ -299,35 +371,28 @@ def main() -> None:
     global JSON_MODE
     JSON_MODE = args.json
 
-    preset = PRESETS[args.preset]
-    res = args.res or preset["res"]
+    model = MODELS[args.model]
+    preset_name = args.preset or DEFAULT_PRESET[args.model]
+    if preset_name not in PRESETS_BY_MODEL[args.model]:
+        sys.exit(f"プリセット {preset_name} は {args.model} モデルでは使えません。")
+    preset = PRESETS_BY_MODEL[args.model][preset_name]
+    if args.model == "photo":
+        if args.rating != "all_ages":
+            sys.exit(PHOTO_R18_MESSAGE)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from safety import check_prompt_safety, check_photo_prompt_safety
+        for check in (check_prompt_safety, check_photo_prompt_safety):
+            ok, msg = check(args.prompt)
+            if not ok:
+                sys.exit(msg)
+    res = RES_PRESETS.get(args.res, args.res) if args.res else preset["res"]
     m = re.fullmatch(r"(\d+)x(\d+)", res)
     if not m:
         sys.exit(f"--res の形式が不正です: {res}（例: 896x1152）")
     width, height = int(m.group(1)), int(m.group(2))
 
-    # プロンプト組み立て
-    #
-    # Animagine XL 4.0 の rating tag を Positive 側にも明示する。
-    #   all_ages -> safe
-    #   r18      -> explicit
-    #
-    # 品質タグはスクリプト側で自動付与するため、ユーザー側で毎回書く必要はない。
-    user_prompt = args.prompt.strip().rstrip(",")
-    rating_tag = "explicit" if args.rating == "r18" else "safe"
-    full_prompt = f"{user_prompt}, {rating_tag}, {preset['quality']}"
-
-    negative = preset["negative"]
-    if args.rating == "r18":
-        # R-18 は未成年表現を避ける語を既定で追加。
-        negative = f"{MINOR_AVOID_NEGATIVE}, {negative}"
-    else:
-        # 全年齢では NSFW を明示的に避ける。
-        negative = f"nsfw, explicit, {negative}"
-
-    # --negative は既定ネガティブを置き換えず、末尾に追記する。
-    if args.negative:
-        negative = f"{negative}, {args.negative.strip().rstrip(',')}"
+    # プロンプト組み立て（build_prompts: anime は rating タグ＋品質タグ、photo は品質語＋常時の安全ネガティブ）
+    full_prompt, negative = build_prompts(args.model, args.rating, args.prompt, preset, args.negative)
 
     work_id = args.work_id or next_work_id()
     work_dir = make_workspace(work_id)
@@ -337,8 +402,8 @@ def main() -> None:
         sys.exit("ComfyUI に接続できません。--no-autostart を外すか手動起動してください。")
 
     try:
-        check_model_available()
-        log(f"- work_id: {work_id}  rating: {args.rating}  preset: {args.preset}")
+        check_model_available(model)
+        log(f"- work_id: {work_id}  model: {model['name']}  rating: {args.rating}  preset: {preset_name}")
         log(f"- {width}x{height} / {preset['steps']}steps / cfg {preset['cfg']} / {preset['sampler']}")
 
         raw_dir = work_dir / "raw"
@@ -350,9 +415,10 @@ def main() -> None:
         for i in range(args.count):
             seed = args.seed if args.seed is not None else random.randint(0, 2**31 - 1)
             seeds.append(seed)
-            graph = build_graph(full_prompt, negative, seed, preset, width, height)
+            graph = build_graph(full_prompt, negative, seed, preset, width, height, model)
             t0 = time.time()
-            imgs = run_one(graph)
+            # DPM++ SDE は1ステップで2回評価するので実写は長めに待つ。
+            imgs = run_one(graph, timeout_s=900 if args.model == "photo" else 360)
             dt = time.time() - t0
             for j, im in enumerate(imgs):
                 src = collect_output(im)
@@ -364,7 +430,7 @@ def main() -> None:
                 gen_entries.append({
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "work_id": work_id, "file": f"raw/{dst.name}",
-                    "model": MODEL["name"], "seed": seed,
+                    "model": model["name"], "seed": seed,
                     "prompt": full_prompt, "negative": negative,
                     "resolution": f"{width}x{height}", "steps": preset["steps"],
                     "cfg": preset["cfg"], "sampler": preset["sampler"],
@@ -372,12 +438,12 @@ def main() -> None:
                 })
 
         write_meta(work_dir, work_id, args.title, args.rating,
-                   full_prompt, negative, seeds, preset, width, height, args.count)
+                   full_prompt, negative, seeds, preset, width, height, args.count, model)
         append_gen_log(gen_entries)
 
         if args.json:
             print(json.dumps({
-                "ok": True, "work_id": work_id, "rating": args.rating,
+                "ok": True, "work_id": work_id, "rating": args.rating, "model": args.model,
                 "images": produced, "seeds": seeds, "count": len(produced),
                 "prompt": full_prompt, "negative": negative,
             }, ensure_ascii=False), flush=True)

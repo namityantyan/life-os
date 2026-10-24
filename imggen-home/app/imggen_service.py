@@ -8,8 +8,10 @@ subprocess で実行して画像を生成・配信する。安全ガードはサ
 起動: IMGGEN_TOKEN=... tools/.venv/bin/python scripts/imggen_service.py
 
 Life OS 自宅Mac版（life-os/imggen-home/app/）: ai-image-business/scripts/imggen_service.py の複製。
-変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）と設定ファイル名（config.env）だけで、
-認証・§0 安全ガード・API 契約は元のまま。起動は bin/service.zsh（launchd: com.lifeos.imggen-svc）。
+変更はパス（~/LifeOS-imggen 配下・IMGGEN_HOME で変更可）と設定ファイル名（config.env）と、
+実写モデルの追加（POST /v1/generate の "model": "anime"（既定）| "photo"、/v1/health の "models"）。
+認証・§0 安全ガード・API 契約は元のまま（model を省いた要求は従来どおり anime）。
+実写は全年齢のみ（r18 は 422）で、check_photo_prompt_safety も追加で通す。起動は bin/service.zsh（launchd: com.lifeos.imggen-svc）。
 """
 from __future__ import annotations
 
@@ -45,6 +47,11 @@ PY = str(VENV_PY) if VENV_PY.exists() else sys.executable
 MODEL_PATH = Path(os.getenv(
     "IMGGEN_MODEL_PATH",
     str(ROOT / "models" / "checkpoints" / "animagine-xl-4.0.safetensors")))
+PHOTO_MODEL_PATH = Path(os.getenv(
+    "IMGGEN_PHOTO_MODEL_PATH",
+    str(ROOT / "models" / "checkpoints" / "RealVisXL_V5.0_fp16.safetensors")))
+MODEL_PATHS = {"anime": MODEL_PATH, "photo": PHOTO_MODEL_PATH}
+PHOTO_R18_MESSAGE = "実写モデルは全年齢のみです。R18・成人向けの実写は生成できません（アニメを選んでください）。"
 COMFY_HOST, COMFY_PORT = "127.0.0.1", 8188
 
 TOKEN = os.getenv("IMGGEN_TOKEN", "")
@@ -58,7 +65,7 @@ RES_RE = re.compile(r"^\d{2,4}x\d{2,4}$")
 
 # safety.py（同ディレクトリ）を流用
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from safety import check_prompt_safety  # noqa: E402
+from safety import check_prompt_safety, check_photo_prompt_safety  # noqa: E402
 
 app = FastAPI(title="imggen-svc", version="0.1")
 
@@ -85,9 +92,11 @@ def _comfy_up() -> bool:
         return False
 
 
-def _model_ready() -> bool:
+def _model_ready(model: str = "anime") -> bool:
+    # セットアップは sha256 を確認してから .part を本来の名前に変えるので、ファイルがあれば確認済み。
+    path = MODEL_PATHS.get(model)
     try:
-        return MODEL_PATH.exists() and MODEL_PATH.stat().st_size > 0
+        return path is not None and path.exists() and path.stat().st_size > 0
     except OSError:
         return False
 
@@ -101,9 +110,10 @@ def health(authorization: str | None = Header(default=None)):
         "comfyui": "up" if _comfy_up() else "down",
         "ssd_mounted": MODEL_PATH.parent.exists(),
         "model_available": _model_ready(),
+        "models": {m: _model_ready(m) for m in MODEL_PATHS},
         "queue_length": _queue.qsize(),
     }
-    # モデルが無い＝生成不可
+    # 既定（anime）モデルが無い＝生成不可。photo の有無は models で返す。
     return Response(content=json.dumps(body, ensure_ascii=False),
                     media_type="application/json",
                     status_code=200 if ok else 503)
@@ -115,6 +125,7 @@ class GenReq(BaseModel):
     prompt: str
     count: int = 1
     rating: str = "all_ages"
+    model: str = "anime"
     seed: int | None = None
     res: str | None = None
     title: str = ""
@@ -142,16 +153,26 @@ async def generate(req: GenReq, wait: bool = Query(default=False),
         raise HTTPException(422, detail={"error": "bad_request", "message": "rating は all_ages|r18"})
     if req.res and not RES_RE.match(req.res):
         raise HTTPException(422, detail={"error": "bad_request", "message": "res は WxH 形式"})
+    if req.model not in MODEL_PATHS:
+        raise HTTPException(422, detail={"error": "bad_request", "message": "model は anime|photo"})
+    if req.model == "photo" and req.rating != "all_ages":
+        raise HTTPException(422, detail={"error": "photo_r18", "message": PHOTO_R18_MESSAGE})
 
-    # §0 安全ガード（サービス側で強制）
+    # §0 安全ガード（サービス側で強制。どのモデルでも同じ）
     ok, msg = check_prompt_safety(req.prompt)
     if not ok:
         raise HTTPException(422, detail={"error": "banned_term", "message": msg})
+    if req.model == "photo":
+        ok, msg = check_photo_prompt_safety(req.prompt)
+        if not ok:
+            raise HTTPException(422, detail={"error": "banned_term", "message": msg})
 
     if _queue.qsize() >= QUEUE_MAX:
         raise HTTPException(503, detail={"error": "unavailable", "message": "キューが一杯です"})
-    if not _model_ready():
-        raise HTTPException(503, detail={"error": "unavailable", "message": "モデル未準備（自宅Macのモデルのダウンロードを確認）"})
+    if not _model_ready(req.model):
+        msg = ("実写モデルが入っていません（自宅Macでセットアップをもう一度実行すると追加されます）"
+               if req.model == "photo" else "モデル未準備（自宅Macのモデルのダウンロードを確認）")
+        raise HTTPException(503, detail={"error": "unavailable", "message": msg})
 
     job_id = "j_" + uuid.uuid4().hex[:8]
     job = {"job_id": job_id, "status": "queued", "req": req.model_dump(),
@@ -176,7 +197,7 @@ def _job_view(job: dict) -> dict:
     if job["status"] == "running":
         v.update({"done": job.get("done", 0), "total": job["req"]["count"]})
     elif job["status"] == "done":
-        v.update({k: job[k] for k in ("work_id", "rating", "seeds", "prompt", "images") if k in job})
+        v.update({k: job[k] for k in ("work_id", "rating", "model", "seeds", "prompt", "images") if k in job})
     elif job["status"] == "error":
         v.update({"error": job.get("error", "internal"), "message": job.get("message", "")})
     return v
@@ -215,7 +236,8 @@ async def _worker():
         job["done"] = 0
         r = job["req"]
         cmd = [PY, str(GENERATE), "--json", "--prompt", r["prompt"],
-               "--rating", r["rating"], "--count", str(r["count"])]
+               "--rating", r["rating"], "--count", str(r["count"]),
+               "--model", r.get("model") or "anime"]
         if r.get("seed") is not None:
             cmd += ["--seed", str(r["seed"])]
         if r.get("res"):
@@ -243,6 +265,7 @@ async def _worker():
                         "seed": data["seeds"][i] if i < len(data.get("seeds", [])) else None,
                     })
                 job.update(status="done", work_id=data["work_id"], rating=data["rating"],
+                           model=data.get("model", r.get("model") or "anime"),
                            seeds=data.get("seeds", []), prompt=data.get("prompt", ""),
                            images=images, done=len(images))
         except Exception as e:  # noqa: BLE001
@@ -255,7 +278,8 @@ async def _worker():
 @app.on_event("startup")
 async def _startup():
     asyncio.create_task(_worker())
-    print(f"imggen-svc 起動: http://{BIND}:{PORT}  model={'OK' if _model_ready() else 'NG'}")
+    print(f"imggen-svc 起動: http://{BIND}:{PORT}  "
+          + "  ".join(f"{m}={'OK' if _model_ready(m) else 'NG'}" for m in MODEL_PATHS))
 
 
 def main():

@@ -1,6 +1,7 @@
 # Shared settings and helpers for the Life OS home-Mac image generation installer (sourced by the .command files).
 # Everything lives under PREFIX (~/LifeOS-imggen). Test overrides: LIFEOS_IMGGEN_PREFIX, LIFEOS_IMGGEN_LAUNCH_AGENTS,
-# LIFEOS_IMGGEN_NO_LAUNCHD=1 (write plists but never touch launchctl), LIFEOS_IMGGEN_SKIP_MODEL=1, LIFEOS_IMGGEN_MODEL_URL/_SIZE/_SHA256.
+# LIFEOS_IMGGEN_NO_LAUNCHD=1 (write plists but never touch launchctl), LIFEOS_IMGGEN_SKIP_MODEL=1 (both models), LIFEOS_IMGGEN_MODEL_URL/_SIZE/_SHA256,
+# LIFEOS_IMGGEN_SKIP_PHOTO=1, LIFEOS_IMGGEN_PHOTO_MODEL_URL/_SIZE/_SHA256, LIFEOS_IMGGEN_PHOTO_MARGIN_GB (free space kept after the photo model, default 3).
 
 PREFIX="${LIFEOS_IMGGEN_PREFIX:-$HOME/LifeOS-imggen}"
 LA_DIR="${LIFEOS_IMGGEN_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}"
@@ -19,6 +20,11 @@ MODEL_FILE=animagine-xl-4.0.safetensors
 MODEL_URL="${LIFEOS_IMGGEN_MODEL_URL:-https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/2b7c1b397761bf5bd3cc42e5b39ec99314a75a96/animagine-xl-4.0.safetensors}"
 MODEL_SIZE="${LIFEOS_IMGGEN_MODEL_SIZE:-6938434056}"
 MODEL_SHA256="${LIFEOS_IMGGEN_MODEL_SHA256:-1d5b43ff75b6ab598502d4c779d2fbfa3dceca51c60c3b609640a60772333916}"
+# Photoreal model (optional; skipped with a message when the disk is short): RealVisXL V5.0 fp16, license openrail++.
+PHOTO_MODEL_FILE=RealVisXL_V5.0_fp16.safetensors
+PHOTO_MODEL_URL="${LIFEOS_IMGGEN_PHOTO_MODEL_URL:-https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc/RealVisXL_V5.0_fp16.safetensors}"
+PHOTO_MODEL_SIZE="${LIFEOS_IMGGEN_PHOTO_MODEL_SIZE:-6938065488}"
+PHOTO_MODEL_SHA256="${LIFEOS_IMGGEN_PHOTO_MODEL_SHA256:-6a35a7855770ae9820a3c931d4964c3817b6d9e3c6f9c4dabb5b3a94e5643b80}"
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export UV_CACHE_DIR="$PREFIX/cache/uv" UV_PYTHON_INSTALL_DIR="$PREFIX/tools/python" UV_PYTHON_BIN_DIR="$PREFIX/tools/bin" UV_TOOL_DIR="$PREFIX/tools/uv-tools" UV_NO_CONFIG=1 UV_PYTHON_PREFERENCE=only-managed
@@ -65,3 +71,11 @@ health() {
   print -r -- "${out##*$'\n'} ${out%$'\n'*}"
 }
 free_gb() { df -g "$1" 2>/dev/null | awk 'NR==2 {print $4}'; }
+free_mb() { df -m "$1" 2>/dev/null | awk 'NR==2 {print $4}'; }
+# Model state for the status check: "ok <MB>" | "part <MB>" | "none".
+model_state() {
+  local m="$PREFIX/models/checkpoints/$1"
+  if [[ -f "$m" && -f "$m.verified" ]]; then print -r -- "ok $(( $(stat -f %z "$m") / 1048576 ))"
+  elif [[ -f "$m.part" ]]; then print -r -- "part $(( $(stat -f %z "$m.part") / 1048576 ))"
+  else print -r -- "none"; fi
+}

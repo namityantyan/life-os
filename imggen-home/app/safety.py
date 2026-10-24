@@ -6,6 +6,9 @@ discord_bot.py / imggen_service.py の双方から流用する（CLAUDE.md §0�
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+
 # 未成年を想起させる語（positive に入った時点で拒否）
 BANNED_PROMPT_TERMS = [
     "loli", "shota", "toddler", "infant", "childlike", "child porn", "cp,",
@@ -27,4 +30,41 @@ def check_prompt_safety(prompt: str) -> tuple[bool, str]:
     for t in BANNED_NAME_TERMS:
         if t.lower() in low:
             return False, f"禁止語『{t}』を含みます（§0: 既存キャラ・実在人物は不可）。"
+    return True, ""
+
+
+# ---- 実写モデル（photo）専用（Life OS 自宅Mac版で追加） -----------------------
+# 実写はディープフェイクの危険が大きいので、全年齢のみ・実在人物の指定は厳しめに弾く。
+# Life OS 側（キーワード＋AI 判定）と同じ方針の第一次フィルタ。最終判断は人間。
+PHOTO_SEXUAL_TERMS = [
+    "nsfw", "nude", "naked", "sex", "sexy", "explicit", "lewd", "ecchi", "hentai", "porn", "nipples",
+    "pussy", "penis", "erotic", "topless", "bottomless", "lingerie", "underwear only", "r18", "r-18",
+    "18禁", "成人向け", "エロ", "全裸", "半裸", "ヌード", "セックス", "性的", "下着姿",
+]
+PHOTO_REAL_PERSON_TERMS = [
+    "celebrity", "celebrities", "famous person", "famous actor", "famous actress", "actor", "actress",
+    "politician", "president", "prime minister", "royal family", "influencer", "youtuber", "streamer",
+    "idol", "lookalike", "look-alike", "looks like", "deepfake", "deep fake", "face swap", "faceswap",
+    "real person", "芸能人", "有名人", "俳優", "女優", "政治家", "首相", "大統領", "アイドル", "配信者",
+    "そっくり", "似せて", "ディープフェイク",
+]
+
+
+def _has(low: str, term: str) -> bool:
+    """ASCII の語は単語境界で（"actor" が "factor" に当たらないように）、日本語は部分一致で。"""
+    if term.isascii():
+        esc = re.escape(term).replace(r"\ ", "[ _]")
+        return re.search(rf"(^|[^a-z0-9]){esc}($|[^a-z0-9])", low) is not None
+    return term in low
+
+
+def check_photo_prompt_safety(prompt: str) -> tuple[bool, str]:
+    """実写モデル用の追加チェック。check_prompt_safety と併用する。(ok, message)。"""
+    low = unicodedata.normalize("NFKC", prompt).lower()
+    for t in PHOTO_SEXUAL_TERMS:
+        if _has(low, t):
+            return False, f"禁止語『{t}』を含みます（実写モデルは全年齢のみ）。"
+    for t in PHOTO_REAL_PERSON_TERMS:
+        if _has(low, t):
+            return False, f"禁止語『{t}』を含みます（実写では実在の人物・実在の人物に似せた画像は不可）。"
     return True, ""

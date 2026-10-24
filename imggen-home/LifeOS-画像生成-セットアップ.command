@@ -1,7 +1,9 @@
 #!/bin/zsh
 # Life OS 画像生成: 自宅Macのセットアップ（ダブルクリックで実行。何度実行しても大丈夫です）
-#   ~/LifeOS-imggen に Python・ComfyUI・モデル（Animagine XL 4.0, 約7GB）・画像生成サービスを入れ、
+#   ~/LifeOS-imggen に Python・ComfyUI・モデル（アニメ: Animagine XL 4.0 / 実写: RealVisXL V5.0, 各約7GB）・画像生成サービスを入れ、
 #   ログイン中は常に動くように launchd へ登録します（サービス・VPSへのトンネル・スリープ防止）。
+# 更新もこのファイルの再実行です: スクリプトを新しくし、ダウンロード済みのモデルはそのまま使い、常駐を登録し直します。
+#   実写モデルは空き容量が足りなければ省略し（アニメだけで動きます）、次に実行したときに追加します。
 # Python は uv（単体バイナリ, sha256 を照合）で ~/LifeOS-imggen の中に入れるので、Homebrew も管理者パスワードも不要です。
 # git は Xcode Command Line Tools のものを使います。
 set -u -o pipefail
@@ -13,7 +15,7 @@ mkdir -p "$PREFIX/logs" || { print -r -- "$PREFIX を作れません"; exit 1; }
 LOG="$PREFIX/logs/setup-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "$LOG") 2>&1
 die() { fail "$1"; info "ログ: $LOG"; pause_exit 1; }
-TOTAL=9
+TOTAL=10
 
 hr; print -r -- "${C_B}  Life OS 画像生成 — 自宅Macのセットアップ${C_0}"; print -r -- "  インストール先: $PREFIX"; hr
 
@@ -43,7 +45,8 @@ if ! xcode-select -p >/dev/null 2>&1 || ! $GIT --version >/dev/null 2>&1; then
   pause_exit 1
 fi
 ok "Xcode Command Line Tools ($($GIT --version))"
-curl -fsS -m 15 -o /dev/null https://pypi.org/simple/ 2>/dev/null || die "インターネットに接続できません。Wi-Fi を確認してください。"
+# HEAD of one small page: the full /simple/ index is ~50MB and timed out within 15s on ordinary lines.
+curl -fsSI -m 15 -o /dev/null https://pypi.org/simple/pip/ 2>/dev/null || die "インターネットに接続できません。Wi-Fi を確認してください。"
 ok "インターネット接続"
 
 # ---- 2. ファイルの配置・接続設定 -------------------------------------------
@@ -135,42 +138,64 @@ mps=$("$PREFIX/venv/bin/python" -c "import torch, fastapi, uvicorn; print(torch.
 [[ "$mps" == *True ]] || die "このMacでは GPU（MPS）が使えません（$mps）。"
 ok "torch ${mps% *} / GPU（MPS）利用可"
 
-# ---- 7. モデル（Animagine XL 4.0） --------------------------------------------
-step "7/$TOTAL" "モデル Animagine XL 4.0 を準備しています（約7GB）"
-verify_model() { [[ "$(shasum -a 256 "$1" | awk '{print $1}')" == "$MODEL_SHA256" ]]; }
+# ---- 7. モデル（アニメ: Animagine XL 4.0） -----------------------------------
+step "7/$TOTAL" "アニメのモデル Animagine XL 4.0 を準備しています（約7GB）"
+# download_model <保存先> <URL> <バイト数> <sha256>: 途中から再開・サイズと sha256 を確認・確認済みなら .verified を置く。
 download_model() {
-  local dest="$model_dest" part="$model_dest.part" marker="$model_dest.verified" size i
+  local dest=$1 url=$2 want=$3 sha=$4 part="$1.part" marker="$1.verified" size i
   if [[ -f "$dest" ]]; then
     size=$(stat -f %z "$dest")
-    if [[ "$size" == "$MODEL_SIZE" && -f "$marker" && "$(<"$marker")" == "$MODEL_SHA256 $size" ]]; then ok "ダウンロード済み（確認済み）"; return 0; fi
-    if [[ "$size" == "$MODEL_SIZE" ]]; then
+    if [[ "$size" == "$want" && -f "$marker" && "$(<"$marker")" == "$sha $size" ]]; then ok "ダウンロード済み（確認済み）"; return 0; fi
+    if [[ "$size" == "$want" ]]; then
       info "ダウンロード済みのファイルを確認しています（1分ほど）"
-      if verify_model "$dest"; then print -r -- "$MODEL_SHA256 $size" > "$marker"; ok "確認しました"; return 0; fi
+      if [[ "$(shasum -a 256 "$dest" | awk '{print $1}')" == "$sha" ]]; then print -r -- "$sha $size" > "$marker"; ok "確認しました"; return 0; fi
       warn "ファイルが壊れているため、ダウンロードし直します"
     fi
     rm -f "$dest" "$marker"
   fi
   for i in {1..30}; do
     size=$(stat -f %z "$part" 2>/dev/null || print 0)
-    (( size > MODEL_SIZE )) && { rm -f "$part"; size=0; }
-    (( size == MODEL_SIZE )) && break
-    (( size > 0 )) && info "続きからダウンロードします（$(( size / 1048576 ))MB / $(( MODEL_SIZE / 1048576 ))MB）"
-    curl -fL --progress-bar --connect-timeout 30 --speed-limit 10240 --speed-time 120 --retry 5 --retry-delay 5 --retry-all-errors -C - -o "$part" "$MODEL_URL" && continue
+    (( size > want )) && { rm -f "$part"; size=0; }
+    (( size == want )) && break
+    (( size > 0 )) && info "続きからダウンロードします（$(( size / 1048576 ))MB / $(( want / 1048576 ))MB）"
+    curl -fL --progress-bar --connect-timeout 30 --speed-limit 10240 --speed-time 120 --retry 5 --retry-delay 5 --retry-all-errors -C - -o "$part" "$url" && continue
     warn "ダウンロードが中断しました（$i 回目）。10秒後に続きから再開します"
     sleep 10
   done
   size=$(stat -f %z "$part" 2>/dev/null || print 0)
-  [[ "$size" == "$MODEL_SIZE" ]] || { fail "モデルをダウンロードしきれませんでした（${size} / ${MODEL_SIZE} バイト）。もう一度実行すると続きから再開します。"; return 1; }
+  [[ "$size" == "$want" ]] || { fail "モデルをダウンロードしきれませんでした（${size} / ${want} バイト）。もう一度実行すると続きから再開します。"; return 1; }
   info "ファイルを確認しています（sha256, 1分ほど）"
-  verify_model "$part" || { rm -f "$part"; fail "モデルのチェックサムが一致しません。もう一度実行してください。"; return 1; }
-  mv -f "$part" "$dest" && print -r -- "$MODEL_SHA256 $MODEL_SIZE" > "$marker" || return 1
+  [[ "$(shasum -a 256 "$part" | awk '{print $1}')" == "$sha" ]] || { rm -f "$part"; fail "モデルのチェックサムが一致しません。もう一度実行してください。"; return 1; }
+  mv -f "$part" "$dest" && print -r -- "$sha $want" > "$marker" || return 1
   ok "ダウンロードして確認しました（sha256 一致）"
 }
 if [[ -n "${LIFEOS_IMGGEN_SKIP_MODEL:-}" ]]; then warn "（テスト）モデルのダウンロードを省略しました"
-else download_model || die "モデルを準備できません。"; fi
+else download_model "$model_dest" "$MODEL_URL" "$MODEL_SIZE" "$MODEL_SHA256" || die "モデルを準備できません。"; fi
 
-# ---- 8. 常駐の登録（launchd） -----------------------------------------------
-step "8/$TOTAL" "常駐を登録しています（サービス・トンネル・スリープ防止）"
+# ---- 8. モデル（実写: RealVisXL V5.0, 空きが足りなければ省略） ---------------
+step "8/$TOTAL" "実写のモデル RealVisXL V5.0 を準備しています（約7GB）"
+photo_dest="$PREFIX/models/checkpoints/$PHOTO_MODEL_FILE"
+photo_result=skipped
+if [[ -n "${LIFEOS_IMGGEN_SKIP_MODEL:-}${LIFEOS_IMGGEN_SKIP_PHOTO:-}" ]]; then warn "（テスト）実写モデルのダウンロードを省略しました"
+elif [[ -f "$photo_dest" && -f "$photo_dest.verified" && "$(<"$photo_dest.verified")" == "$PHOTO_MODEL_SHA256 $PHOTO_MODEL_SIZE" ]]; then ok "ダウンロード済み（確認済み）"; photo_result=ok
+else
+  have=$(stat -f %z "$photo_dest.part" 2>/dev/null || stat -f %z "$photo_dest" 2>/dev/null || print 0)
+  (( have > PHOTO_MODEL_SIZE )) && have=0
+  need_mb=$(( (PHOTO_MODEL_SIZE - have) / 1048576 + ${LIFEOS_IMGGEN_PHOTO_MARGIN_GB:-3} * 1024 ))
+  mb=$(free_mb "$PREFIX")
+  if [[ -z "$mb" ]] || (( mb < need_mb )); then
+    warn "内蔵ディスクの空きが足りないため、実写モデルは入れませんでした（空き $(( ${mb:-0} / 1024 ))GB・必要 約$(( (need_mb + 1023) / 1024 ))GB）。"
+    info "アニメのモデルだけで動きます。空きを作ってからこのセットアップをもう一度実行すると、実写モデルを追加します。"
+    photo_result=nospace
+  elif download_model "$photo_dest" "$PHOTO_MODEL_URL" "$PHOTO_MODEL_SIZE" "$PHOTO_MODEL_SHA256"; then photo_result=ok
+  else
+    warn "実写モデルを準備できませんでした。アニメのモデルだけで動きます（もう一度実行すると続きから再開します）。"
+    photo_result=failed
+  fi
+fi
+
+# ---- 9. 常駐の登録（launchd） -----------------------------------------------
+step "9/$TOTAL" "常駐を登録しています（サービス・トンネル・スリープ防止）"
 xml() { local s=$1; s=${s//&/&amp;}; s=${s//</&lt;}; s=${s//>/&gt;}; print -r -- "$s"; }
 write_plist() { # label, program args...
   local label=$1; shift; local a args=""
@@ -202,7 +227,7 @@ for l in $LABELS; do agent_start "$l" || die "常駐を登録できません: $l
 ok "登録しました: ${(j:, :)LABELS}"
 
 # ---- 9. 動作確認 -------------------------------------------------------------
-step "9/$TOTAL" "動作を確認しています"
+step "10/$TOTAL" "動作を確認しています"
 if [[ -n "${LIFEOS_IMGGEN_NO_LAUNCHD:-}" ]]; then
   warn "（テスト）常駐を起動していないため、動作確認は省略しました"
 else
@@ -220,12 +245,20 @@ fi
 
 print -r -- ""; hr
 print -r -- "${C_B}  セットアップが終わりました${C_0}"; hr
+case $photo_result in
+  ok) print -r -- "  モデル: アニメ・実写の両方が使えます（実写は全年齢のみ）。" ;;
+  nospace) print -r -- "  モデル: アニメだけ使えます。実写は空き容量不足で省略しました（空きを作ってから再実行すると追加します）。" ;;
+  failed) print -r -- "  モデル: アニメだけ使えます。実写はダウンロードできませんでした（再実行すると続きから再開します）。" ;;
+  *) print -r -- "  モデル: アニメだけ使えます（実写は省略しました）。" ;;
+esac
 print -r -- "  1. このMacは電源アダプタにつなぎ、ふたを開けたままにしてください（画面は消えても大丈夫です）。"
 print -r -- "     ふたを閉じる・バッテリー駆動にするとスリープして、画像生成は止まります。"
 print -r -- "  2. Life OS の画像生成ページを開き、右上が「接続中」になれば使えます。"
 print -r -- "     1回目の生成は準備（ComfyUI の起動とモデルの読み込み）で 1〜2 分余分にかかります。"
 print -r -- "  3. 状態確認・アンインストールは $PREFIX の中の .command からいつでも実行できます。"
 print -r -- "  4. ダウンロードした zip と展開したフォルダには接続用の鍵が入っています。終わったら削除してください。"
+print -r -- "  5. 更新するときは、Life OS から新しい zip をダウンロードしてこのセットアップをもう一度実行してください。"
+print -r -- "     ダウンロード済みのモデルはそのまま使い、スクリプトと常駐だけを入れ直します。"
 print -r -- "  ログイン中は自動で動き続けます（再起動後もログインすれば自動で再開）。"
 print -r -- "  ログ: $LOG"
 pause_exit 0

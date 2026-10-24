@@ -103,6 +103,33 @@ describe("imggen-home sources", () => {
     expect(svc).toContain("ok, msg = check_prompt_safety(req.prompt)");
     expect(readFileSync(join(root, "app/generate.py"), "utf8")).toContain("MINOR_AVOID_NEGATIVE = \"child, loli, shota");
   });
+
+  it("add the photo model: pinned download, all-ages only, safety on both models, upgrade-in-place setup", () => {
+    const rd = (p: string) => readFileSync(join(root, p), "utf8");
+    const common = rd("lib/common.zsh");
+    expect(common).toContain("PHOTO_MODEL_URL=\"${LIFEOS_IMGGEN_PHOTO_MODEL_URL:-https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc/RealVisXL_V5.0_fp16.safetensors}\"");
+    expect(common).toContain("PHOTO_MODEL_SIZE=\"${LIFEOS_IMGGEN_PHOTO_MODEL_SIZE:-6938065488}\"");
+    expect(common).toContain("PHOTO_MODEL_SHA256=\"${LIFEOS_IMGGEN_PHOTO_MODEL_SHA256:-6a35a7855770ae9820a3c931d4964c3817b6d9e3c6f9c4dabb5b3a94e5643b80}\"");
+    expect(common).toMatch(/for i in \{1\.\.30\}; do agent_loaded "\$1" \|\| return 0; sleep 0\.5; done/); // agent_stop waits for bootout
+    const gen = rd("app/generate.py");
+    expect(gen).toContain("\"ckpt_file\": \"RealVisXL_V5.0_fp16.safetensors\"");
+    expect(gen).toContain("PHOTO_SAFETY_NEGATIVE = f\"nsfw, nude, naked, explicit, sexual, cleavage, underwear, lingerie, {MINOR_AVOID_NEGATIVE}\"");
+    expect(gen).toMatch(/"sampler": "dpmpp_sde",\s+"scheduler": "karras"/);
+    expect(gen).toContain("ap.add_argument(\"--model\", default=\"anime\"");
+    const svc = rd("app/imggen_service.py");
+    expect(svc).toContain("model: str = \"anime\"");
+    expect(svc).toContain("if req.model == \"photo\" and req.rating != \"all_ages\":");
+    expect(svc).toContain("ok, msg = check_photo_prompt_safety(req.prompt)");
+    expect(svc).toContain("\"models\": {m: _model_ready(m) for m in MODEL_PATHS}");
+    expect(rd("bin/service.zsh")).toContain("IMGGEN_PHOTO_MODEL_PATH=\"$PREFIX/models/checkpoints/RealVisXL_V5.0_fp16.safetensors\"");
+    const setup = rd("LifeOS-画像生成-セットアップ.command");
+    expect(setup).toContain("download_model \"$photo_dest\" \"$PHOTO_MODEL_URL\" \"$PHOTO_MODEL_SIZE\" \"$PHOTO_MODEL_SHA256\"");
+    expect(setup).toContain("内蔵ディスクの空きが足りないため、実写モデルは入れませんでした");
+    expect(setup).toContain("更新するときは、Life OS から新しい zip をダウンロードしてこのセットアップをもう一度実行してください。");
+    const status = rd("状態確認.command");
+    expect(status).toContain("model_state \"$MODEL_FILE\"");
+    expect(status).toContain("model_state \"$PHOTO_MODEL_FILE\"");
+  });
 });
 
 describe("GET /api/images/home-installer", () => {
