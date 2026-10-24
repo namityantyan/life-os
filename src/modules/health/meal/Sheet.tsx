@@ -25,8 +25,9 @@ export function Sheet({ open, onClose, title, children, footer, wide, testId, la
       const el = ref.current; if (!el || el.contains(document.activeElement)) return;
       (el.querySelector<HTMLElement>("[data-autofocus]") ?? el).focus({ preventScroll: true });
     }, 30);
-    const { overflow } = document.body.style; document.body.style.overflow = "hidden";
-    return () => { stack.splice(stack.indexOf(me), 1); window.removeEventListener("keydown", h); clearTimeout(t); document.body.style.overflow = overflow; opener?.focus?.({ preventScroll: true }); };
+    // Page scroll is locked while any sheet is open and released when the last one closes, whatever the order.
+    document.body.style.overflow = "hidden";
+    return () => { stack.splice(stack.indexOf(me), 1); window.removeEventListener("keydown", h); clearTimeout(t); if (!stack.length) document.body.style.overflow = ""; opener?.focus?.({ preventScroll: true }); };
   }, [open]);
   return (
     <AnimatePresence>
