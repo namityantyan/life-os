@@ -118,18 +118,20 @@ function ChartTab() {
   const [fitAll, setFitAll] = useState(false);
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const spanSec = SPANS.find((s) => s.value === span)!.sec;
-  const [tick, setTick] = useState(0);
-  const toSec = to ?? Math.floor(Date.now() / 1000);
+  // "Now" is pinned in state and only advances on the 30 s tick (or when returning to now), so the parent's
+  // 5 s /fx/status poll re-rendering this tab doesn't change the path and refetch the chart.
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  const toSec = to ?? nowSec;
   const path = `/fx/chart?pair=${encodeURIComponent(pair)}&tf=${tf}&rule=${rule}&from=${toSec - spanSec}&to=${toSec}`;
-  const { data, loading, error, reload } = useApi<ChartResponse>(path, { deps: [tick] });
-  useEffect(() => { const id = setInterval(() => { if (document.visibilityState === "visible" && to == null) setTick((t) => t + 1); }, 30_000); return () => clearInterval(id); }, [to]);
+  const { data, loading, error, reload } = useApi<ChartResponse>(path, { quiet: true });
+  useEffect(() => { const id = setInterval(() => { if (document.visibilityState === "visible" && to == null) setNowSec(Math.floor(Date.now() / 1000)); }, 30_000); return () => clearInterval(id); }, [to]);
 
   const shift = (dir: -1 | 1) => {
     const base = to ?? Math.floor(Date.now() / 1000);
     const next = base + dir * spanSec;
     const lo = data?.stored_range.from ?? null;
     if (dir === -1 && lo != null && next - spanSec < lo - spanSec) return; // stay inside stored range
-    if (dir === 1 && next >= Math.floor(Date.now() / 1000)) { setTo(null); return; }
+    if (dir === 1 && next >= Math.floor(Date.now() / 1000)) { setNowSec(Math.floor(Date.now() / 1000)); setTo(null); return; }
     setTo(next);
   };
   const toggles = useMemo(() => [

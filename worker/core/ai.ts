@@ -9,15 +9,18 @@ const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
  * (local dev without login, or quota issues) a deterministic fallback is returned so the
  * UI and tests keep working; the caller can show `provider: "fallback"` to the user.
  */
-export async function chat(env: Env, messages: ChatMessage[], opts: { maxTokens?: number; json?: boolean } = {}): Promise<{ text: string; provider: "workers-ai" | "fallback" }> {
+export async function chat(env: Env, messages: ChatMessage[], opts: { maxTokens?: number; json?: boolean; timeoutMs?: number } = {}): Promise<{ text: string; provider: "workers-ai" | "fallback" }> {
   try {
     if (!env.AI) throw new Error("AI binding missing");
-    const res = (await env.AI.run(MODEL as any, {
+    const call = env.AI.run(MODEL as any, {
       messages,
       // JSON replies carry structure (and the whole routine), so they need more room than prose.
       max_tokens: opts.maxTokens ?? (opts.json ? 2000 : 800),
       ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-    } as any)) as { response?: string | object; choices?: { message?: { content?: string }; finish_reason?: string }[] };
+    } as any, ...(opts.timeoutMs ? [{ timeoutMs: opts.timeoutMs, retry: false } as any] : []));
+    // `timeoutMs` is a hard bound for quick, optional calls: the relay shim aborts its fetch (no retry),
+    // and the race covers the Workers binding, which has no timeout of its own.
+    const res = (await (opts.timeoutMs ? Promise.race([call, new Promise((_, rej) => setTimeout(() => rej(new Error(`AI timeout ${opts.timeoutMs}ms`)), opts.timeoutMs))]) : call)) as { response?: string | object; choices?: { message?: { content?: string }; finish_reason?: string }[] };
     // Workers AI returns { response: string } for prose, but with response_format it can be an already
     // parsed object, and some models answer OpenAI-style in { choices }.
     const raw = res?.response ?? res?.choices?.[0]?.message?.content ?? "";

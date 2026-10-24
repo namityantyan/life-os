@@ -1,4 +1,7 @@
+import type { Env } from "../env";
 import type { PressureAssessment, WeatherLocation } from "../../shared/types";
+import { getSetting, kvPutSafe } from "./db";
+import { detach, type Background } from "./background";
 
 export const PRESSURE_THRESHOLDS = {
   delta3h: { caution: 2.5, strong: 4.0 },
@@ -68,3 +71,33 @@ export const WEATHER_CODE_LABEL: Record<number, string> = {
   0: "快晴", 1: "晴れ", 2: "一部曇り", 3: "曇り", 45: "霧", 48: "霧氷", 51: "霧雨", 53: "霧雨", 55: "霧雨",
   61: "小雨", 63: "雨", 65: "大雨", 71: "小雪", 73: "雪", 75: "大雪", 80: "にわか雨", 81: "にわか雨", 82: "激しいにわか雨", 95: "雷雨", 96: "雷雨", 99: "雷雨",
 };
+
+/**
+ * Stale-while-revalidate weather (Open-Meteo is ~1 s from the VPS). The last snapshot is kept for 2 days;
+ * younger than 10 min → served as is; up to 3 h old → served at once and refreshed in the background;
+ * older (or none) → fetched now, falling back to the stale snapshot if the fetch fails.
+ */
+export const WEATHER_FRESH_MS = 10 * 60e3, WEATHER_STALE_MAX_MS = 3 * 3600e3;
+const refreshing = new Map<string, Promise<WeatherSnapshot>>();
+export async function weatherFor(env: Env, loc: WeatherLocation, bg: Background = detach, fetcher: (l: WeatherLocation) => Promise<WeatherSnapshot> = fetchWeather): Promise<WeatherSnapshot> {
+  const key = `weather:v2:${loc.lat.toFixed(2)},${loc.lon.toFixed(2)}`;
+  const cached = (await env.KV.get(key, "json").catch(() => null)) as WeatherSnapshot | null;
+  const age = cached?.fetched_at ? Date.now() - Date.parse(cached.fetched_at) : Infinity;
+  const refresh = () => {
+    let p = refreshing.get(key);
+    if (!p) {
+      p = fetcher(loc).then(async (w) => { await kvPutSafe(env, key, JSON.stringify(w), { expirationTtl: 2 * 86400 }); return w; }).finally(() => refreshing.delete(key));
+      refreshing.set(key, p);
+    }
+    return p;
+  };
+  if (cached?.pressure_series && age < WEATHER_FRESH_MS) return cached;
+  if (cached?.pressure_series && age < WEATHER_STALE_MAX_MS) { bg(refresh()); return cached; }
+  try { return await refresh(); } catch (e) { if (cached?.pressure_series) return cached; throw e; }
+}
+/** The user's weather (null when no location is set or nothing could be fetched). */
+export async function weatherCached(env: Env, userId: string, bg: Background = detach): Promise<WeatherSnapshot | null> {
+  const loc = await getSetting<WeatherLocation | null>(env, userId, "weather_location", null);
+  if (!loc) return null;
+  try { return await weatherFor(env, loc, bg); } catch { return null; }
+}
