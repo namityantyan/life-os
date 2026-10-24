@@ -13,7 +13,6 @@
 ```
 ブラウザ / PWA ─▶ https://dashboard.nami-tool.com ─▶ nginx ─▶ 127.0.0.1:8791（PM2 lifeos）
 Windows コネクター・バックアップ PC ─▶ workers.dev（中継）─▶ dashboard.nami-tool.com
-Discord ─▶ https://dashboard.nami-tool.com/api/integrations/discord/interactions
 Google ログイン ─▶ workers.dev の callback（Google に登録済み）─302─▶ dashboard.nami-tool.com
 ```
 

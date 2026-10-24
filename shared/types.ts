@@ -2,15 +2,16 @@
 export type User = { id: string; email: string; name: string | null; picture: string | null };
 
 export const NOTIFICATION_KINDS = [
-  "fx", "reminder", "backup", "morning", "bedtime", "training", "weekly", "royalty", "invoice", "withholding", "system",
+  "fx", "reminder", "backup", "morning", "bedtime", "training", "weekly", "royalty", "invoice", "withholding", "images", "system",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   fx: "FX", reminder: "リマインド", backup: "バックアップ", morning: "朝のお知らせ", bedtime: "就寝",
   training: "トレーニング", weekly: "週次まとめ", royalty: "著作権明細", invoice: "請求書・領収書",
-  withholding: "源泉徴収", system: "システム",
+  withholding: "源泉徴収", images: "画像生成", system: "システム",
 };
-export type NotificationPrefs = Record<NotificationKind, { push: boolean; discord: boolean }>;
+/** Legacy per-kind prefs (setting "notification_prefs"); read only to seed "push_prefs". See shared/notifications.ts. */
+export type NotificationPrefs = Record<NotificationKind, { push: boolean; discord?: boolean }>;
 
 export type Notification = {
   id: string; kind: NotificationKind; title: string; body: string | null; url: string | null;

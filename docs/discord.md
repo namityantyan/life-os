@@ -1,5 +1,7 @@
 # Discord BOT（生活管理BOT）
 
+> 2026-10-24 から停止中です。通知はアプリの Web Push に置き換えました。`DISCORD_ENABLED=1` を設定しない限り、Interactions エンドポイントと `/api/discord/*` は 404 を返し、Discord への送信も行いません（連携データの表は残してあります）。
+
 Life OS の Discord 連携は **Discord Interactions（HTTP エンドポイント + スラッシュコマンド）** と、
 DM 送信用の outbound REST で構成されています。
 

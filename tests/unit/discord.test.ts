@@ -115,3 +115,15 @@ describe("commands & misc", () => {
     expect(truncateForDiscord("short")).toBe("short");
   });
 });
+
+describe("kill switch", () => {
+  it("answers 404 on the interactions endpoint and /api/discord/* unless DISCORD_ENABLED=1", async () => {
+    const { discordEnabled, publicRoutes, routes } = await import("../../worker/modules/discord/routes");
+    const env = { DISCORD_PUBLIC_KEY: "00", APP_ORIGIN: "https://x" };
+    expect(discordEnabled({})).toBe(false);
+    expect(discordEnabled({ DISCORD_ENABLED: "1" })).toBe(true);
+    expect((await publicRoutes.request("/interactions", { method: "POST", body: "{}" }, env)).status).toBe(404);
+    expect((await routes.request("/status", {}, env)).status).toBe(404);
+    expect((await publicRoutes.request("/interactions", { method: "POST", body: "{}" }, { ...env, DISCORD_ENABLED: "1" })).status).toBe(401);
+  });
+});
