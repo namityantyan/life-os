@@ -1,0 +1,4 @@
+# imggen-svc (FastAPI) on top of ComfyUI's requirements
+fastapi
+uvicorn
+python-dotenv

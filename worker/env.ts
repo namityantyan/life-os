@@ -42,6 +42,12 @@ export type Env = {
    *  reverse SSH tunnel, and its bearer token. Both optional; without them the images page shows 未設定. */
   IMGGEN_URL?: string;
   IMGGEN_TOKEN?: string;
+  /** 自宅Mac用セットアップ (GET /api/images/home-installer): path of the reverse tunnel's private key on this server,
+   *  and the tunnel's ssh destination (default rocky@133.167.105.210). Both are written into the downloaded zip. */
+  IMGGEN_TUNNEL_KEY?: string;
+  IMGGEN_TUNNEL_HOST?: string;
+  /** Reads a local file (self-hosted server only; absent on Cloudflare). */
+  LOCAL_FILES?: { read(path: string): Promise<string> };
   /** Byte store for generated images. The self-hosted server injects a directory-backed store
    *  (IMGGEN_STORE_DIR); without it images go to the image_blobs table. */
   IMAGE_STORE?: ImageStore;

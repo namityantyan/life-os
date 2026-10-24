@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, ApiError, useApi, fmtDateTime } from "@/lib/api";
+import { Icon } from "@/components/icons";
 import { Badge, Button, Card, EmptyState, ErrorBanner, Field, Input, Item, Modal, PageHeader, PageSkeleton, Segmented, Skeleton, Stagger, cx, useToast } from "@/components/ui";
 import { IMAGE_COUNT_MAX, IMAGE_RATING_LABELS, IMAGE_STATUS_LABELS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "@shared/images";
 
@@ -100,6 +101,8 @@ export default function Page() {
         )}
       </AnimatePresence>
 
+      {svc && !online && <HomeMacSetup className="mb-5" />}
+
       <Card className="mb-6 space-y-3" data-testid="images-composer">
         <form onSubmit={(e) => { e.preventDefault(); generate(); }} className="space-y-3">
           <textarea ref={taRef} value={text} onChange={(e) => { setText(e.target.value); setRefusal(null); }} placeholder="例：花畑で白いワンピースの女の子が微笑んでいる" aria-label="作りたい画像" data-testid="images-prompt"
@@ -161,6 +164,8 @@ export default function Page() {
         </Stagger>
       )}
 
+      {online && <HomeMacSetup className="mt-8" />}
+
       <ImageModal selected={selected} onClose={() => setSelected(null)} onDelete={removeFile} onReuse={(g) => { setText(g.prompt_text); setRating(g.rating); setSelected(null); taRef.current?.focus(); }} />
     </div>
   );
@@ -193,5 +198,44 @@ function ImageModal({ selected, onClose, onDelete, onReuse }: { selected: Select
         </div>
       )}
     </Modal>
+  );
+}
+
+/** 自宅のMacで生成する: downloads the one-click installer zip (with this server's token and tunnel key) for another Mac. */
+function HomeMacSetup({ className }: { className?: string }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const download = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/images/home-installer", { credentials: "same-origin" });
+      if (!res.ok) { const b = await res.json().catch(() => null) as { error?: string } | null; throw new Error(b?.error ?? "ダウンロードできませんでした"); }
+      const url = URL.createObjectURL(await res.blob());
+      const a = Object.assign(document.createElement("a"), { href: url, download: "lifeos-imggen-setup.zip" });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e) { toast(e instanceof Error ? e.message : "ダウンロードできませんでした", "error"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Card className={className} data-testid="images-home-mac">
+      <button type="button" className="flex w-full items-center gap-2 text-left focus-ring rounded-[var(--radius-sm)]" aria-expanded={open} onClick={() => setOpen((v) => !v)} data-testid="images-home-mac-toggle">
+        <span className="flex-1 font-semibold text-sm">自宅のMacで生成する</span>
+        <Icon name="chevron-down" size={18} className={cx("text-label-3 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3">
+          <ol className="list-decimal pl-5 text-sm text-label-2 space-y-1">
+            <li>生成に使うMac（Apple Silicon・macOS 14以降・空き20GB以上）でこのページを開き、下のボタンからダウンロードします。</li>
+            <li>展開したフォルダの「LifeOS-画像生成-セットアップ.command」をダブルクリックします。開けないときは右クリックして「開く」（それでも開けないときは システム設定 → プライバシーとセキュリティ →「このまま開く」）。</li>
+            <li>モデル（約7GB）のダウンロードが終わるまで待ちます。終わったら電源につなぎ、ふたを開けたままにしておきます。</li>
+          </ol>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="sm" variant="tinted" onClick={download} loading={busy} data-testid="images-home-mac-download">セットアップをダウンロード</Button>
+            <span className="text-xs text-label-3">接続用の鍵が入っています。セットアップ後は zip と展開したフォルダを削除してください。</span>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

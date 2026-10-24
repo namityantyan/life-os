@@ -6,6 +6,7 @@ import { chatJson } from "../../core/ai";
 import { notify } from "../../core/notify";
 import { IMAGE_COUNT_MAX, IMAGE_RATINGS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
 import { IMAGE_SYSTEM_PROMPT, SAFE_NAME, clampCount, decideRating, guardText, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError } from "./logic";
+import { buildHomeInstaller } from "./installer";
 
 /**
  * 画像生成. Talks to the Mac imggen service (IMGGEN_URL, bearer IMGGEN_TOKEN — never sent to the browser).
@@ -44,7 +45,7 @@ export async function serviceStatus(env: Env): Promise<ImageServiceStatus> {
   const b = (await readJson(r)) as { ok?: boolean; comfyui?: string; model_available?: boolean; queue_length?: number } | null;
   const detail = { comfyui: b?.comfyui === "up" ? "up" as const : b?.comfyui === "down" ? "down" as const : null, model_available: typeof b?.model_available === "boolean" ? b.model_available : null, queue_length: typeof b?.queue_length === "number" ? b.queue_length : null };
   if (r.ok && b?.ok) return { state: "online", message: null, ...detail };
-  return { state: "offline", message: b?.model_available === false ? "Macのモデルが準備できていません（SSDが未接続の可能性）。" : "画像生成サービスが応答しません。", ...detail };
+  return { state: "offline", message: b?.model_available === false ? "Macのモデルが準備できていません（SSDが未接続か、モデルをダウンロード中の可能性）。" : "画像生成サービスが応答しません。", ...detail };
 }
 
 /* ---------- storage ---------- */
@@ -148,6 +149,20 @@ export async function syncPendingImages(env: Env) {
 /* ---------- routes ---------- */
 
 routes.get("/status", async (c) => c.json({ status: await serviceStatus(c.env) }));
+
+/** 自宅Mac用セットアップ zip (imggen-home/ + IMGGEN_TOKEN + the tunnel's private key read from IMGGEN_TUNNEL_KEY, a file path). */
+routes.get("/home-installer", async (c) => {
+  const e = c.env;
+  const unavailable = (error: string) => c.json({ error, code: "unconfigured" }, 503);
+  if (!e.IMGGEN_TOKEN) return unavailable("サーバーに IMGGEN_TOKEN が設定されていないため、自宅Mac用のセットアップを作れません。");
+  if (!e.IMGGEN_TUNNEL_KEY) return unavailable("サーバーに IMGGEN_TUNNEL_KEY（トンネル用の鍵ファイル）が設定されていないため、自宅Mac用のセットアップを作れません。");
+  if (!e.LOCAL_FILES) return unavailable("この環境では自宅Mac用のセットアップを作れません（自宅サーバー版のみ）。");
+  let key: string;
+  try { key = await e.LOCAL_FILES.read(e.IMGGEN_TUNNEL_KEY); } catch { return unavailable("サーバーでトンネル用の鍵ファイル（IMGGEN_TUNNEL_KEY）を読めません。"); }
+  const r = buildHomeInstaller({ token: e.IMGGEN_TOKEN, key, host: e.IMGGEN_TUNNEL_HOST });
+  if (!r.ok) return unavailable(r.message);
+  return new Response(r.zip, { headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="lifeos-imggen-setup.zip"`, "Content-Length": String(r.zip.length), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+});
 
 routes.get("/", async (c) => {
   const user = c.get("user");

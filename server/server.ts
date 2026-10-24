@@ -2,6 +2,8 @@
 //   https://dashboard.nami-tool.com → nginx → 127.0.0.1:8791 (this process, PM2 "lifeos")
 // Bindings: DB = SQLite (D1 shim), KV = SQLite table, AI = Workers AI via the relay Worker, ASSETS = dist/client.
 import { readdirSync, readFileSync, mkdirSync, readdirSync as ls, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import worker from "../worker/index";
@@ -29,9 +31,9 @@ db.optimize();
 const assets = staticFiles(CLIENT);
 
 const env = {
-  DB: db, KV: kv, ASSETS: assets, IMAGE_STORE: imageStore, AI: aiRelay(process.env.AI_RELAY_URL, process.env.AI_RELAY_SECRET),
+  DB: db, KV: kv, ASSETS: assets, IMAGE_STORE: imageStore, LOCAL_FILES: { read: (p: string) => readFile(p.replace(/^~(?=\/)/, homedir()), "utf8") }, AI: aiRelay(process.env.AI_RELAY_URL, process.env.AI_RELAY_SECRET),
   APP_NAME: "Life OS", APP_ORIGIN: need("APP_ORIGIN"), ALLOWED_EMAILS: need("ALLOWED_EMAILS"), SESSION_SECRET: need("SESSION_SECRET"),
-  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(GOOGLE_|VAPID_|DISCORD_|OURA_|FREEE_|BACKUP_|FX_CONNECTOR_TOKEN$|AI_RELAY_|IMGGEN_(URL|TOKEN)$|DEV_LOGIN$)/.test(k))),
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(GOOGLE_|VAPID_|DISCORD_|OURA_|FREEE_|BACKUP_|FX_CONNECTOR_TOKEN$|AI_RELAY_|IMGGEN_(URL|TOKEN|TUNNEL_KEY|TUNNEL_HOST)$|DEV_LOGIN$)/.test(k))),
 } as unknown as Env;
 
 const pending = new Set<Promise<unknown>>();

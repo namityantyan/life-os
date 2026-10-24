@@ -44,6 +44,15 @@ Google ログイン ─▶ workers.dev の callback（Google に登録済み）�
 | `IMGGEN_URL` | `http://127.0.0.1:18787`（トンネルの VPS 側） |
 | `IMGGEN_TOKEN` | Mac 側サービスと同じトークン。旧 BOT の `~/kintore-bot/.env` にある値と同じもの。ブラウザには渡さない |
 | `IMGGEN_STORE_DIR` | 任意。生成画像の保存先（既定 `~/lifeos/data/images`） |
+| `IMGGEN_TUNNEL_KEY` | 任意。自宅Mac用セットアップ（下記）に入れるトンネル用秘密鍵の**ファイルパス**（VPS 上。`~/` 可） |
+| `IMGGEN_TUNNEL_HOST` | 任意。トンネルの接続先（既定 `rocky@133.167.105.210`） |
+
+### 自宅のMacで生成する（ワンクリックセットアップ）
+
+画像生成ページの「自宅のMacで生成する」から `lifeos-imggen-setup.zip`（`GET /api/images/home-installer`）をダウンロードし、生成に使う Mac で `LifeOS-画像生成-セットアップ.command` をダブルクリックします。中身は `imggen-home/`（サービス・generate.py・safety.py の複製、セットアップ／状態確認／アンインストール）に、`IMGGEN_TOKEN`・`IMGGEN_TUNNEL_HOST`・`IMGGEN_TUNNEL_KEY` の鍵を `secrets/`（0600）として足したものです。`IMGGEN_TOKEN` か `IMGGEN_TUNNEL_KEY` が無いと 503。
+
+- 入る場所は `~/LifeOS-imggen`（Python は uv で中に入れる・Homebrew 不要、ComfyUI は固定コミット、モデルは内蔵ディスク）。launchd は `com.lifeos.imggen-svc` / `com.lifeos.imggen-tunnel` / `com.lifeos.imggen-awake`（`caffeinate -s -i`）。
+- トンネルは接続のたびに先に `ssh … cleanup`（VPS 側の forced command）を実行して 18787 の古い待ち受けを外します。トンネルを張る Mac は 1 台だけにしてください（2 台あると交互に切断し合います）。
 
 - 生成が終わった画像はすぐにサーバーへコピーするので、Mac が寝ていても過去の画像は表示・ダウンロードできます。画像は SQLite ではなくファイルで保存します（毎日の DB バックアップを肥大させないため）。`data/images/` は DB バックアップに含まれません。
 - ページを閉じても、10 分ごとの cron が生成待ちのジョブを確認して画像を受け取ります（Mac 側はジョブを 1 時間で忘れるため）。
