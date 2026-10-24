@@ -5,7 +5,7 @@ import { all, one, run, newId } from "../../core/db";
 import { chatJson } from "../../core/ai";
 import { notify } from "../../core/notify";
 import { IMAGE_COUNT_MAX, IMAGE_RATINGS, type ImageFile, type ImageGeneration, type ImageRating, type ImageServiceStatus } from "../../../shared/images";
-import { IMAGE_SYSTEM_PROMPT, SAFE_NAME, clampCount, decideRating, guardText, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError } from "./logic";
+import { IMAGE_SYSTEM_PROMPT, SAFE_NAME, clampCount, decideRating, guardText, aiRefusal, looksLikeTags, normalizeTags, parseConversion, refuseMessage, serviceError } from "./logic";
 import { buildHomeInstaller } from "./installer";
 
 /**
@@ -190,6 +190,7 @@ export async function prepareRequest(env: Env, body: z.infer<typeof genSchema>):
     if (!looksLikeTags(body.text)) return { ok: false, status: 503, code: "ai_unavailable", message: "AIに接続できないため日本語を変換できません。英語のタグで入力すると生成できます。" };
     conv = { refuse: null, reason: "", tags: normalizeTags(body.text), rating: "all_ages", count: null };
   }
+  conv.refuse = aiRefusal(conv.refuse, body.text);
   if (conv.refuse) return { ok: false, status: 422, code: "refused", message: refuseMessage(conv.refuse, conv.reason) };
   if (!conv.tags) return { ok: false, status: 422, code: "empty", message: "画像の内容を読み取れませんでした。もう少し具体的に書いてください。" };
   const rating = decideRating(body.rating, conv.rating, body.text);

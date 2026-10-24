@@ -106,7 +106,7 @@ export const IMAGE_SYSTEM_PROMPT = `あなたは画像生成プロンプトの�
 - "real_person": 実在の人物（芸能人、政治家、配信者、知人など）
 - "named_character": 既存のアニメ・ゲーム・漫画などの特定キャラクターや作品
 - "artist": 特定の作家・イラストレーター・スタジオの絵柄の指定
-- "image_input": 画像や写真を入力にした変換（文章からの生成のみ対応）
+- "image_input": ユーザーが手元の画像・写真を渡してそれを変換させる依頼（「この写真を」「添付の画像を元に」など）。「実写」「写真風」「リアル」などの画風の指定はこれに当たらない（realistic, photorealistic などのタグにする）
 問題がなければ refuse は null。
 
 出力形式（このJSONだけ）:
@@ -131,6 +131,9 @@ export function parseConversion(raw: unknown): AiConversion | null {
   const count = o.count == null ? null : clampCount(o.count, 1);
   return { refuse, reason: typeof o.reason === "string" ? o.reason.slice(0, 200) : "", tags, rating, count };
 }
+/** The AI sometimes reads style words like 実写/写真風 as image input. There is no upload, so only honour that refusal when the text asks for one. */
+const I2I_HINT = /(画像|写真|絵|イラスト).{0,6}(を元|をもと|を参考|を変換|を加工)|添付|アップロード|この(画像|写真|絵)|img2img|i2i/i;
+export const aiRefusal = (code: string | null, text: string) => (code === "image_input" && !I2I_HINT.test(text) ? null : code);
 export const refuseMessage = (code: string, reason?: string) => REFUSE_MESSAGES[code] ?? (reason?.trim() || "この内容は生成できません。");
 
 /** Final rating: r18 only when the user picked it, or when both the model and the user's own words say so. */

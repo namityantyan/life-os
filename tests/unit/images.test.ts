@@ -273,3 +273,14 @@ describe("images routes", () => {
     expect(calls.some((c) => c.url.includes("passwd"))).toBe(false);
   });
 });
+
+describe("image_input refusals from the AI", () => {
+  it("ignores style words like 実写 but keeps real image-input requests", async () => {
+    const { aiRefusal } = await import("../../worker/modules/images/logic");
+    expect(aiRefusal("image_input", "花畑で銀髪の女子がひまわりを持って立っている。実写")).toBeNull();
+    expect(aiRefusal("image_input", "写真風のリアルな夜景")).toBeNull();
+    expect(aiRefusal("image_input", "この写真をアニメ風にして")).toBe("image_input");
+    expect(aiRefusal("image_input", "添付の画像を元に描いて")).toBe("image_input");
+    expect(aiRefusal("real_person", "実写")).toBe("real_person");
+  });
+});
